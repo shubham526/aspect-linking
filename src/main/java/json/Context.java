@@ -27,10 +27,10 @@ public class Context {
         }
     }
 
-    String getContent() {
+    public String getContent() {
         return content;
     }
-    List<String> getEntityList() {
+    public List<String> getEntityList() {
         return entityList;
     }
 }
