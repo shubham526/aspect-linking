@@ -28,7 +28,6 @@ import java.util.*;
  */
 
 public class SalienceScore {
-    private final List<JSONObject> jsonObjectList;
 
     /**
      * Constructor.
@@ -37,16 +36,17 @@ public class SalienceScore {
      */
 
     public SalienceScore(String jsonFilePath, String runFilePath) {
-        jsonObjectList = ReadJsonlFile.read(jsonFilePath);
-        score(runFilePath);
+        List<JSONObject> jsonObjectList = ReadJsonlFile.read(jsonFilePath);
+        score(runFilePath, jsonObjectList);
     }
 
     /**
      * Method to score candidate aspects for every entity mention.
      * @param runFilePath String Path to the run file.
+     * @param jsonObjectList List List of JSON objects read from file.
      */
 
-    private void score(String runFilePath) {
+    private void score(String runFilePath, @NotNull List<JSONObject> jsonObjectList) {
         Map<String, Map<String, Double>> rankings = new HashMap<>(); // Map to store the rankings
         Map<String, Double> paraScoreMap; // Inner map
         int c = 0;
