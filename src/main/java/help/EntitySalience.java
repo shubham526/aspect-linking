@@ -164,7 +164,7 @@ public class EntitySalience {
      * @return String The response read
      */
     @NotNull
-    private static String read(URLConnection connection) {
+    private static String read(@NotNull URLConnection connection) {
 
         InputStream inputStream;
         try {

@@ -14,7 +14,7 @@ import java.util.*;
 
 /**
  * ==============================Experiment-1===================================================
- * 1) (a) Use "content" from either sent_context or para_context.
+ * 1) (a) Use "content" from either sent_context or para_context or sect_context.
  *    (b) Pass content to SWAT. Get map of (entity,sal_score).
  * 2) Aspect candidates are the candidates we are trying to score.
  *   -- For Every aspect content, score the content by summing over the
