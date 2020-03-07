@@ -75,6 +75,11 @@ public class EntitySalience {
         write(jsonInputString, connection);
         String res = read(connection);
 
+        if (res.isEmpty()) {
+            System.err.println("Server returned no result.");
+            return;
+        }
+
         try {
             JSONObject response = new JSONObject(res);
             String status = response.getString("status");
@@ -90,6 +95,7 @@ public class EntitySalience {
                 }
             }
         } catch (JSONException e) {
+            System.err.println("ERROR: JSONException");
             e.printStackTrace();
         }
     }
@@ -195,6 +201,7 @@ public class EntitySalience {
                 response.append(responseLine.trim());
             }
         } catch (IOException e) {
+            System.err.println("ERROR: IOException while reading from InputStream");
             e.printStackTrace();
         }
         return response.toString();
@@ -225,7 +232,7 @@ public class EntitySalience {
                 getSalientEntities(jsonObjects, salientEntities);
             }
         } catch (JSONException e) {
-            System.out.println("ERROR: JSONException");
+            System.err.println("ERROR: JSONException");
             e.printStackTrace();
 
         }
