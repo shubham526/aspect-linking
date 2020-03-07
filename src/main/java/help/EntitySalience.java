@@ -165,9 +165,31 @@ public class EntitySalience {
      */
     @NotNull
     private static String read(URLConnection connection) {
+
+        InputStream inputStream;
+        try {
+            inputStream = connection.getInputStream();
+        } catch (IOException e) {
+            System.err.println("ERROR: IOException");
+            System.err.println("Input Stream not available.");
+            return "";
+        }
+
+        try {
+            if (inputStream.available() == 0) {
+                System.err.println("InputStream available but no data to read.");
+                return "";
+            }
+        } catch (IOException e) {
+            System.err.println("ERROR: IOException");
+            System.err.println("InputStream available but no data to read.");
+            return "";
+        }
+
+
         StringBuilder response = new StringBuilder();
         try (BufferedReader br = new BufferedReader(
-                new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+                new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
             String responseLine;
             while ((responseLine = br.readLine()) != null) {
                 response.append(responseLine.trim());
@@ -190,6 +212,11 @@ public class EntitySalience {
         write(jsonInputString, connection);
         String res = read(connection);
 
+        if (res.isEmpty()) {
+            System.err.println("Server returned no result.");
+            return;
+        }
+
         try {
             JSONObject response = new JSONObject(res);
             String status = response.getString("status");
@@ -198,7 +225,9 @@ public class EntitySalience {
                 getSalientEntities(jsonObjects, salientEntities);
             }
         } catch (JSONException e) {
+            System.out.println("ERROR: JSONException");
             e.printStackTrace();
+
         }
     }
 
