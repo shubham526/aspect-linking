@@ -1,7 +1,8 @@
 package experiments;
 
-import help.EntitySalience;
+import help.SWATApi;
 import help.Utilities;
+import help.WATApi;
 import json.Aspect;
 import json.Context;
 import json.JsonObject;
@@ -10,7 +11,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.json.simple.JSONObject;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * ==============================Experiment-1===================================================
@@ -104,7 +108,7 @@ public class SalienceScore {
             rank = 1;
             for (String idAspect : scoreMap.keySet()) {
                 runFileString = idContext + " " + " 0 " + idAspect + " " +
-                        rank++ + " " + scoreMap.get(idAspect) + " salience-sec-context" ;
+                        rank++ + " " + scoreMap.get(idAspect) + " salience-sec-context-1" ;
                 runStrings.add(runFileString);
             }
         }
@@ -127,7 +131,7 @@ public class SalienceScore {
         String content = context.getContent(); // Get the content of the context
 
         // Use SWAT to find the salient entities in the context
-        Map<String, Double> salientEntities = EntitySalience.getSalientEntities(content);
+        Map<String, Double> salientEntities = SWATApi.getSalientEntities(content);
 
         // If any salient entities were found then
         if (salientEntities != null) {
@@ -183,15 +187,19 @@ public class SalienceScore {
 
         // But also use the entities in the content.
         String aspectContent = aspect.getContent();
-        Map<String, Double> aspectSalientEntities = EntitySalience.getSalientEntities(aspectContent);
-
-        // Does SWAT return any salient entities?
-        // If yes, then add them to the list.
-        // But first lowercase them.
-        if (aspectSalientEntities != null) {
-            for (String e : aspectSalientEntities.keySet()) {
-                aspectEntityList.add(e.toLowerCase());
-            }
+//        Map<String, Double> aspectSalientEntities = SWATApi.getSalientEntities(aspectContent);
+//
+//        // Does SWAT return any salient entities?
+//        // If yes, then add them to the list.
+//        // But first lowercase them.
+//        if (aspectSalientEntities != null) {
+//            for (String e : aspectSalientEntities.keySet()) {
+//                aspectEntityList.add(e.toLowerCase());
+//            }
+//        }
+        List<WATApi.Annotation> annotationList = WATApi.EntityLinker.getAnnotations(aspectContent,0.1);
+        for (WATApi.Annotation annotation : annotationList) {
+            aspectEntityList.add(annotation.getWikiTitle().toLowerCase());
         }
 
         return aspectEntityList;
