@@ -21,10 +21,10 @@ import java.util.Scanner;
  * You can either annotate all entities in the text (salient as well as non-salient) or just the salient entities.
  * The class creates a Map of annotated entities and writes it to disk as a serialized file.
  * @author Shubham Chatterjee
- * @version 4/24/2019
+ * @version 3/8/2020
  */
 
-public class EntitySalience {
+public class SWATApi {
     private final static String URL = "https://swat.d4science.org/salience";
     private final static String TOKEN = "8775ecea-90d0-4fca-89d3-e19c0790489f-843339462";
 
@@ -288,7 +288,7 @@ public class EntitySalience {
         String text = sc.nextLine();
         System.out.println("Enter file to store: ");
         String file = sc.nextLine();
-        ArrayList<String> list = EntitySalience.getAllEntities(text);
+        ArrayList<String> list = SWATApi.getAllEntities(text);
         System.out.println("Writing....");
         ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File(file)));
         oos.writeObject(list);
