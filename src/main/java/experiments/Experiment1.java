@@ -31,7 +31,7 @@ import java.util.Map;
  * @version 03/03/2020
  */
 
-public class SalienceScore {
+public class Experiment1 {
 
     /**
      * Constructor.
@@ -39,7 +39,7 @@ public class SalienceScore {
      * @param runFilePath String Path to the run file.
      */
 
-    public SalienceScore(String jsonFilePath, String runFilePath) {
+    public Experiment1(String jsonFilePath, String runFilePath) {
         List<JSONObject> jsonObjectList = ReadJsonlFile.read(jsonFilePath);
         score(runFilePath, jsonObjectList);
     }
@@ -226,7 +226,7 @@ public class SalienceScore {
     public static void main(@NotNull String[] args) {
         String file = args[0];
         String runFile = args[1];
-        new SalienceScore(file, runFile);
+        new Experiment1(file, runFile);
     }
 
 }

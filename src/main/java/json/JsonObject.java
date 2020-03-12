@@ -69,7 +69,6 @@ public class JsonObject {
 
     @NotNull
     public static String getIdContext(@NotNull JSONObject ob) {
-        String eid = (String) ob.get("id_context");
-        return eid.replaceAll("%20", "_");
+        return (String) ob.get("id_context");
     }
 }

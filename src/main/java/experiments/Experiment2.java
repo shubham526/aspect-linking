@@ -19,6 +19,7 @@ import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMDirichletSimilarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
+import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.json.simple.JSONObject;
 
@@ -38,7 +39,7 @@ import java.util.*;
  * @version 03/12/2020
  */
 
-public class ECN {
+public class Experiment2 {
 
     private final IndexSearcher searcher;
     private HashMap<String, String> idMap = new HashMap<>();
@@ -56,14 +57,14 @@ public class ECN {
      * @param similarity Similarity Type of similarity to use for search.
      */
 
-    public ECN(String indexDir,
-               String dataDir,
-               String outputDir,
-               String jsonFile,
-               String runFile,
-               String idFile,
-               Analyzer analyzer,
-               Similarity similarity) {
+    public Experiment2(String indexDir,
+                       String dataDir,
+                       String outputDir,
+                       String jsonFile,
+                       String runFile,
+                       String idFile,
+                       Analyzer analyzer,
+                       Similarity similarity) {
 
         String jsonFilePath = dataDir + "/"  + jsonFile;
         String idFilePath = dataDir + "/" + idFile;
@@ -102,14 +103,27 @@ public class ECN {
                        String idFilePath) {
 
         Map<String, Map<String, Double>> aspectScoresForEntity = new HashMap<>();
+        Map<String, Map<String, Double>> entityScoresForAspect = new HashMap<>();
+        Map<String, Double> finalScores;
+        ArrayList<String> runFileStrings = new ArrayList<>();
+        Map<String, Integer> accuracyMap = new HashMap<>();
+        double accuracy;
+
+        // Do in parallel
+        //jsonObjectList.parallelStream().forEach(this::doTask);
 
 
 
         // For every JSON object do
 
         for (JSONObject jsonObject : jsonObjectList) {
+            System.out.println();
+            System.out.println();
 
-            System.out.println("Mention: " + JsonObject.getMention(jsonObject));
+            System.out.println("Mention: " + JsonObject.getMention(jsonObject) + "\t");
+            System.out.println("+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+");
+
+            //if (!JsonObject.getMention(jsonObject).equalsIgnoreCase("legal status")) continue;
 
             // Get the sentence/paragraph/section context
             Context context = JsonObject.getSentenceContext(jsonObject);
@@ -119,28 +133,131 @@ public class ECN {
 
             // Get the list of entities in the context
             List<String> entityList = getEntities(context);
-            System.out.println("Found: " + entityList.size());
+            //System.out.println("Found: " + entityList.size());
 
             // Get the candidate aspects
             List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
 
             // For every entity in the context do
             for (String entity : entityList) {
+//            for (int i = 0; i < 5; i++) {
+//                String entity = entityList.get(i);
 
                 // If the entity is not already present in the score map
                 if (!aspectScoresForEntity.containsKey(entity)) {
+                    System.out.print("Entity: " + entity + "\t");
 
                     // Score the candidate aspects for the entity
                     Map<String, Double> aspectScores = scoreAspects(entity, candidateAspects);
 
                     // Store the aspect scores for the entity
                     aspectScoresForEntity.put(entity,aspectScores);
-                    System.out.println("Done: " + entity);
+                    System.out.println(".......[Done]");
                 }
             }
+            System.out.println("+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+");
+            getEntityScoresForAspect(aspectScoresForEntity, entityScoresForAspect);
+            finalScores = getFinalScoresOfAspect(entityScoresForAspect);
+            makeRunFileStrings(jsonObject, finalScores, runFileStrings);
+            findAccuracy(jsonObject, finalScores, accuracyMap);
+            System.out.println("Accuracy: "  + findAccuracy(accuracyMap));
+
             System.out.println("==============================================================================");
         }
+
+        accuracy = findAccuracy(accuracyMap);
+        System.out.println("Final Accuracy = " + accuracy);
+        System.out.print("Writing to run file...");
+        Utilities.writeFile(runFileStrings, runFilePath);
+        System.out.println("[Done].");
     }
+
+    private double findAccuracy(@NotNull Map<String, Integer> accuracyMap) {
+        double accuracy;
+
+        int totalMentions = accuracyMap.size();
+        int totalCorrect = Collections.frequency(accuracyMap.values(), 1);
+        accuracy = (double)totalCorrect / totalMentions;
+        return accuracy;
+    }
+
+    private void makeRunFileStrings(JSONObject jsonObject,
+                                    @NotNull Map<String, Double> scoreMap,
+                                    ArrayList<String> runStrings) {
+        String runFileString;
+        String idContext = JsonObject.getIdContext(jsonObject);
+        int rank = 1;
+        for (String idAspect : scoreMap.keySet()) {
+            runFileString = idContext + " " + " 0 " + idAspect + " " +
+                    rank++ + " " + scoreMap.get(idAspect) + "ecn-sent-context" ;
+            runStrings.add(runFileString);
+        }
+    }
+
+    private void findAccuracy(JSONObject jsonObject,
+                              @NotNull Map<String, Double> finalScores,
+                              Map<String, Integer> accuracyMap) {
+
+        String correctAspectId = JsonObject.getCorrectAspectId(jsonObject);
+        String mention = JsonObject.getMention(jsonObject);
+        Map.Entry<String, Double> entry = finalScores.entrySet().iterator().next();
+        String predictedAspectId = entry.getKey();
+
+        if (correctAspectId.equalsIgnoreCase(predictedAspectId)) {
+            accuracyMap.put(mention, 1);
+        } else {
+            accuracyMap.put(mention, 0);
+        }
+    }
+
+
+
+    @NotNull
+    private Map<String, Double> getFinalScoresOfAspect(@NotNull Map<String, Map<String, Double>> entityScoresForAspect) {
+
+        List<String> aspectIdList = new ArrayList<>(entityScoresForAspect.keySet());
+        Map<String, Double> finalScores = new HashMap<>();
+
+        for (String aspectId : aspectIdList) {
+            Map<String, Double> entityScores = entityScoresForAspect.get(aspectId);
+            double score = sum(entityScores);
+            finalScores.put(aspectId, score);
+        }
+
+        return Utilities.sortByValueDescending(finalScores);
+    }
+
+    @Contract(pure = true)
+    private double sum(@NotNull Map<String, Double> entityScores) {
+        double sum = 0.0d;
+
+        for (double score : entityScores.values()) {
+            sum += score;
+        }
+
+        return sum;
+    }
+
+    private void getEntityScoresForAspect(@NotNull Map<String, Map<String, Double>> aspectScoresForEntity,
+                                          Map<String, Map<String, Double>> entityScoresForAspect) {
+
+        List<String> entityList = new ArrayList<>(aspectScoresForEntity.keySet());
+        Map<String, Double> entityScores;
+
+        for (String entity : entityList) {
+            Map<String, Double> aspectScores = aspectScoresForEntity.get(entity);
+            List<String> aspectList = new ArrayList<>(aspectScores.keySet());
+            for (String aspect : aspectList) {
+                double aspectScore = aspectScores.get(aspect);
+                entityScores = entityScoresForAspect.containsKey(aspect)
+                        ? entityScoresForAspect.get(aspect)
+                        : new HashMap<>();
+                entityScores.put(entity, aspectScore);
+                entityScoresForAspect.put(aspect, entityScores);
+            }
+        }
+    }
+
 
     /**
      * Helper method.
@@ -234,10 +351,13 @@ public class ECN {
         List<String> dataEntityList = lowercase(aspect.getEntityList());
 
         // Get the annotations from WAT API
-        List<WATApi.Annotation> watEntityList = WATApi.EntityLinker.getAnnotations(aspect.getContent());
+        List<WATApi.Annotation> watEntityList = WATApi.EntityLinker.getAnnotations(aspect.getContent(),0);
 
-        for (WATApi.Annotation annotation : watEntityList) {
-            dataEntityList.add(annotation.getWikiTitle().toLowerCase());
+        if (!watEntityList.isEmpty()) {
+
+            for (WATApi.Annotation annotation : watEntityList) {
+                dataEntityList.add(annotation.getWikiTitle().toLowerCase());
+            }
         }
         return dataEntityList;
     }
@@ -390,8 +510,10 @@ public class ECN {
 
         // But also use entities annotated with WAT API.
         List<WATApi.Annotation> annotationList = WATApi.EntityLinker.getAnnotations(content,0.1);
-        for (WATApi.Annotation annotation : annotationList) {
-            entityList.add(annotation.getWikiTitle().toLowerCase());
+        if (! annotationList.isEmpty()) {
+            for (WATApi.Annotation annotation : annotationList) {
+                entityList.add(annotation.getWikiTitle().toLowerCase());
+            }
         }
 
         return entityList;
@@ -478,7 +600,7 @@ public class ECN {
                 System.out.println("Wrong choice of similarity! Program end.");
                 System.exit(1);
         }
-        new ECN(indexDir, dataDir, outputDir, jsonFile, runFile, idFile, analyzer, similarity);
+        new Experiment2(indexDir, dataDir, outputDir, jsonFile, runFile, idFile, analyzer, similarity);
 
 
     }
