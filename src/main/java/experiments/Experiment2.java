@@ -4,7 +4,6 @@ import help.PseudoDocument;
 import help.Utilities;
 import help.WATApi;
 import json.Aspect;
-import json.Context;
 import json.JsonObject;
 import json.ReadJsonlFile;
 import lucene.Index;
@@ -26,6 +25,7 @@ import org.json.simple.JSONObject;
 import java.io.IOException;
 import java.io.StringReader;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * =======================================Experiment-2=======================================
@@ -42,8 +42,12 @@ import java.util.*;
 public class Experiment2 {
 
     private final IndexSearcher searcher;
-    private HashMap<String, String> idMap = new HashMap<>();
     private final Analyzer analyzer;
+    private final ArrayList<String> runFileStrings = new ArrayList<>();
+    private final ConcurrentHashMap<String, Integer> accuracyMap = new ConcurrentHashMap<>();
+    private Map<String, HashMap<String, Integer>> contextEntityMap = new HashMap<>();
+    private Map<String, HashMap<String, HashMap<String, Integer>>> aspectEntityMap = new HashMap<>();
+    private final List<Double> accuracyList = new ArrayList<>();
 
     /**
      * Constructor.
@@ -51,8 +55,11 @@ public class Experiment2 {
      * @param dataDir String Path to the data directory.
      * @param outputDir String Path to the output directory.
      * @param jsonFile String Name of the JSON-L file.
+     * @param contextEntityFile String Name of the serialized file containing context entities.
+     * @param aspectEntityFile String Name of the serialized file containing aspect entities.
      * @param runFile String Name of the run file.
-     * @param idFile String Name of the id file.
+     * @param accuracyFile String Name of the file where the accuracy will be stored.
+     * @param useRelatedness Boolean Whether or not to use relatedness.
      * @param analyzer Analyzer Type of Lucene analyzer.
      * @param similarity Similarity Type of similarity to use for search.
      */
@@ -61,142 +68,146 @@ public class Experiment2 {
                        String dataDir,
                        String outputDir,
                        String jsonFile,
+                       String contextEntityFile,
+                       String aspectEntityFile,
                        String runFile,
-                       String idFile,
+                       String accuracyFile,
+                       boolean useRelatedness,
                        Analyzer analyzer,
                        Similarity similarity) {
 
         String jsonFilePath = dataDir + "/"  + jsonFile;
-        String idFilePath = dataDir + "/" + idFile;
+        String contextEntityFilePath = dataDir + "/" + contextEntityFile;
+        String aspectEntityFilePath = dataDir + "/" + aspectEntityFile;
         String runFilePath = outputDir + "/" + runFile;
+        String accuracyFilePath = outputDir + "/" + accuracyFile;
 
         System.out.print("Setting up index for use...");
         searcher = new Index.Setup(indexDir, "text", analyzer, similarity).getSearcher();
         this.analyzer = analyzer;
         System.out.println("[Done].");
 
-        System.out.print("Reading the ID file...");
+        System.out.print("Reading the JSON-L file...");
+        List<JSONObject> jsonObjectList = ReadJsonlFile.read(jsonFilePath);
+        System.out.println("[Done].");
+        System.out.println("Found: " + jsonObjectList.size() + " JSON objects.");
+
+        System.out.print("Reading the context entity file...");
         try {
-            idMap = Utilities.readMap(idFilePath);
+            contextEntityMap = Utilities.readMap(contextEntityFilePath);
         } catch (IOException | ClassNotFoundException e) {
             e.printStackTrace();
         }
         System.out.println("[Done].");
 
-        System.out.print("Reading the JSON-L file...");
-        List<JSONObject> jsonObjectList = ReadJsonlFile.read(jsonFilePath);
+        System.out.print("Reading the aspect entity file...");
+        try {
+            aspectEntityMap = Utilities.readMap(aspectEntityFilePath);
+        } catch (IOException | ClassNotFoundException e) {
+            e.printStackTrace();
+        }
         System.out.println("[Done].");
 
+        score(runFilePath, jsonObjectList, useRelatedness);
 
-        score(runFilePath, jsonObjectList, idFilePath);
+        System.out.print("Saving accuracy values...");
+        try {
+            Utilities.writeList(accuracyList, accuracyFilePath);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        System.out.println("[Done].");
     }
+
 
     /**
      * Method to score.
      * @param runFilePath String
      * @param jsonObjectList List
-     * @param idFilePath String
      */
 
     private void score(String runFilePath,
                        @NotNull List<JSONObject> jsonObjectList,
-                       String idFilePath) {
+                       boolean useRelatedness) {
+
+        double accuracy;
+
+        // Do in parallel
+        jsonObjectList.parallelStream().forEach(queryId -> doTask(queryId, useRelatedness));
+
+        // Do in serial
+        //jsonObjectList.forEach(this::doTask);
+        jsonObjectList.forEach(queryId -> doTask(queryId, useRelatedness));
+
+        accuracy = findAccuracy();
+        System.out.println("Final Accuracy = " + accuracy);
+
+        System.out.print("Writing to run file...");
+        Utilities.writeFile(runFileStrings, runFilePath);
+        System.out.println("[Done].");
+
+    }
+
+    private void doTask(JSONObject jsonObject, boolean useRelatedness) {
 
         Map<String, Map<String, Double>> aspectScoresForEntity = new HashMap<>();
         Map<String, Map<String, Double>> entityScoresForAspect = new HashMap<>();
         Map<String, Double> finalScores;
-        ArrayList<String> runFileStrings = new ArrayList<>();
-        Map<String, Integer> accuracyMap = new HashMap<>();
-        double accuracy;
 
-        // Do in parallel
-        //jsonObjectList.parallelStream().forEach(this::doTask);
+        String mention = JsonObject.getMention(jsonObject);
+        String entityName = JsonObject.getEntityName(jsonObject);
+        String entityId = JsonObject.getEntityId(jsonObject);
 
+        // Get the Map of (entity, id) in the context
+        Map<String, Integer> entityMap = contextEntityMap.get(entityId);
 
+        // Get the candidate aspects
+        List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
 
-        // For every JSON object do
+        // For every entity in the context do
+        for (String entity : entityMap.keySet()) {
 
-        for (JSONObject jsonObject : jsonObjectList) {
-            System.out.println();
-            System.out.println();
+            // If the entity is not already present in the score map
+            if (!aspectScoresForEntity.containsKey(entity)) {
+                // Score the candidate aspects for the entity
+                Map<String, Double> aspectScores = scoreAspects(entity, entityId, candidateAspects);
 
-            System.out.println("Mention: " + JsonObject.getMention(jsonObject) + "\t");
-            System.out.println("+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+");
-
-            //if (!JsonObject.getMention(jsonObject).equalsIgnoreCase("legal status")) continue;
-
-            // Get the sentence/paragraph/section context
-            Context context = JsonObject.getSentenceContext(jsonObject);
-
-            // Get the corresponding content
-            String content = context.getContent();
-
-            // Get the list of entities in the context
-            List<String> entityList = getEntities(context);
-            //System.out.println("Found: " + entityList.size());
-
-            // Get the candidate aspects
-            List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
-
-            // For every entity in the context do
-            for (String entity : entityList) {
-//            for (int i = 0; i < 5; i++) {
-//                String entity = entityList.get(i);
-
-                // If the entity is not already present in the score map
-                if (!aspectScoresForEntity.containsKey(entity)) {
-                    System.out.print("Entity: " + entity + "\t");
-
-                    // Score the candidate aspects for the entity
-                    Map<String, Double> aspectScores = scoreAspects(entity, candidateAspects);
-
-                    // Store the aspect scores for the entity
-                    aspectScoresForEntity.put(entity,aspectScores);
-                    System.out.println(".......[Done]");
-                }
+                // Store the aspect scores for the entity
+                aspectScoresForEntity.put(entity,aspectScores);
             }
-            System.out.println("+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+");
-            getEntityScoresForAspect(aspectScoresForEntity, entityScoresForAspect);
-            finalScores = getFinalScoresOfAspect(entityScoresForAspect);
-            makeRunFileStrings(jsonObject, finalScores, runFileStrings);
-            findAccuracy(jsonObject, finalScores, accuracyMap);
-            System.out.println("Accuracy: "  + findAccuracy(accuracyMap));
-
-            System.out.println("==============================================================================");
         }
+        getEntityScoresForAspect(aspectScoresForEntity, entityScoresForAspect);
+        finalScores = getFinalScoresOfAspect(entityName, entityId, entityScoresForAspect, useRelatedness);
+        makeRunFileStrings(jsonObject, finalScores);
+        findAccuracy(jsonObject, finalScores);
+        System.out.println("Mention :" + mention + "\t" + "Accuracy: "  + findAccuracy());
 
-        accuracy = findAccuracy(accuracyMap);
-        System.out.println("Final Accuracy = " + accuracy);
-        System.out.print("Writing to run file...");
-        Utilities.writeFile(runFileStrings, runFilePath);
-        System.out.println("[Done].");
     }
 
-    private double findAccuracy(@NotNull Map<String, Integer> accuracyMap) {
+    private double findAccuracy() {
         double accuracy;
 
         int totalMentions = accuracyMap.size();
         int totalCorrect = Collections.frequency(accuracyMap.values(), 1);
         accuracy = (double)totalCorrect / totalMentions;
+        accuracyList.add(accuracy);
         return accuracy;
     }
 
     private void makeRunFileStrings(JSONObject jsonObject,
-                                    @NotNull Map<String, Double> scoreMap,
-                                    ArrayList<String> runStrings) {
+                                    @NotNull Map<String, Double> scoreMap) {
         String runFileString;
         String idContext = JsonObject.getIdContext(jsonObject);
         int rank = 1;
         for (String idAspect : scoreMap.keySet()) {
-            runFileString = idContext + " " + " 0 " + idAspect + " " +
-                    rank++ + " " + scoreMap.get(idAspect) + "ecn-sent-context" ;
-            runStrings.add(runFileString);
+            runFileString = idContext + " " + "0" + " " + idAspect + " " +
+                    rank++ + " " + scoreMap.get(idAspect) + " "+ "ecn-para-context-not-using-relatedness" ;
+            runFileStrings.add(runFileString);
         }
     }
 
     private void findAccuracy(JSONObject jsonObject,
-                              @NotNull Map<String, Double> finalScores,
-                              Map<String, Integer> accuracyMap) {
+                              @NotNull Map<String, Double> finalScores) {
 
         String correctAspectId = JsonObject.getCorrectAspectId(jsonObject);
         String mention = JsonObject.getMention(jsonObject);
@@ -213,14 +224,17 @@ public class Experiment2 {
 
 
     @NotNull
-    private Map<String, Double> getFinalScoresOfAspect(@NotNull Map<String, Map<String, Double>> entityScoresForAspect) {
+    private Map<String, Double> getFinalScoresOfAspect(String entityName,
+                                                       String entityId,
+                                                       @NotNull Map<String, Map<String, Double>> entityScoresForAspect,
+                                                       boolean useRelatedness) {
 
         List<String> aspectIdList = new ArrayList<>(entityScoresForAspect.keySet());
         Map<String, Double> finalScores = new HashMap<>();
 
         for (String aspectId : aspectIdList) {
             Map<String, Double> entityScores = entityScoresForAspect.get(aspectId);
-            double score = sum(entityScores);
+            double score = sum(entityName, entityId, entityScores, useRelatedness);
             finalScores.put(aspectId, score);
         }
 
@@ -228,11 +242,43 @@ public class Experiment2 {
     }
 
     @Contract(pure = true)
-    private double sum(@NotNull Map<String, Double> entityScores) {
+    private double sum(String eName,
+                       String eID,
+                       @NotNull Map<String, Double> entityScores,
+                       boolean useRelatedness) {
+
         double sum = 0.0d;
 
-        for (double score : entityScores.values()) {
-            sum += score;
+        if (useRelatedness) {
+            // If using relatedness measure
+            for (String entity : entityScores.keySet()) {
+                double entityScore = entityScores.get(entity);
+                int id = WATApi.TitleResolver.getId(eName);
+                int entityId = contextEntityMap.get(eID).get(entity);
+                double relatedness;
+                if (id == entityId) {
+                    relatedness = 1.0d;
+                } else {
+                    List<WATApi.EntityRelatedness.Pair> pair = new ArrayList<>();
+                    try {
+                        pair = WATApi.EntityRelatedness.getRelatedness("mw", id, entityId);
+                        relatedness = pair.get(0).getRelatedness();
+                    } catch (IndexOutOfBoundsException e) {
+                        System.err.print("ERROR: IndexOutOfBoundsException");
+                        System.out.println(pair);
+                        relatedness = 0.0d;
+                    }
+                }
+                sum += (relatedness * entityScore);
+            }
+            return sum;
+        }
+
+        // If not using relatedness measure
+
+        for (String entity : entityScores.keySet()) {
+            double entityScore = entityScores.get(entity);
+            sum += entityScore;
         }
 
         return sum;
@@ -249,9 +295,12 @@ public class Experiment2 {
             List<String> aspectList = new ArrayList<>(aspectScores.keySet());
             for (String aspect : aspectList) {
                 double aspectScore = aspectScores.get(aspect);
-                entityScores = entityScoresForAspect.containsKey(aspect)
-                        ? entityScoresForAspect.get(aspect)
-                        : new HashMap<>();
+
+                if (entityScoresForAspect.containsKey(aspect)) {
+                    entityScores = entityScoresForAspect.get(aspect);
+                } else {
+                    entityScores = new HashMap<>();
+                }
                 entityScores.put(entity, aspectScore);
                 entityScoresForAspect.put(aspect, entityScores);
             }
@@ -268,7 +317,7 @@ public class Experiment2 {
      */
 
     @NotNull
-    private Map<String, Double> scoreAspects(String entity, List<Aspect> candidateAspects) {
+    private Map<String, Double> scoreAspects(String entity, String entityId, List<Aspect> candidateAspects) {
 
         Map<String, Double> aspectScores = new HashMap<>();
         // Create the pseudo-document for the entity
@@ -281,7 +330,7 @@ public class Experiment2 {
             Map<String, Double> distribution = getDistribution(pseudoDocument);
 
             // Now score the candidate aspects
-            aspectScores = scoreAspects(distribution, candidateAspects);
+            aspectScores = scoreAspects(entityId, distribution, candidateAspects);
 
         }
         return Utilities.sortByValueDescending(aspectScores);
@@ -297,18 +346,21 @@ public class Experiment2 {
      */
 
     @NotNull
-    private Map<String, Double> scoreAspects(Map<String, Double> distribution, @NotNull List<Aspect> candidateAspects) {
+    private Map<String, Double> scoreAspects(String entityId,
+                                             Map<String, Double> distribution,
+                                             @NotNull List<Aspect> candidateAspects) {
+
         Map<String, Double> aspectScores = new HashMap<>();
 
 
         // For every candidate aspect
         for (Aspect aspect : candidateAspects) {
 
-            // Get all the entities in the aspect (provided with the data + WAT annotations)
-            List<String> aspectEntityList = getAspectEntities(aspect);
+            // Get all the (entity, id) in the aspect (provided with the data + WAT annotations)
+            Map<String, Integer> aspectEntity = aspectEntityMap.get(entityId).get(aspect.getId());
 
             // Score the aspect
-            double score = scoreAspect(distribution, aspectEntityList);
+            double score = scoreAspect(distribution, new ArrayList<>(aspectEntity.keySet()));
             aspectScores.put(aspect.getId(), score);
         }
 
@@ -328,38 +380,11 @@ public class Experiment2 {
         double score = 0.0d;
 
         for (String aspectEntity : aspectEntityList) {
-            if (distribution.containsKey(aspectEntity)) {
-                score += distribution.get(aspectEntity);
+            if (distribution.containsKey(aspectEntity.toLowerCase())) {
+                score += distribution.get(aspectEntity.toLowerCase());
             }
         }
         return score;
-    }
-
-    /**
-     * Helper method.
-     * Returns the list of entities in the aspect.
-     * Uses both entities provided in the data as well as those returned by WAT.
-     * @param aspect Aspect
-     * @return List
-     */
-
-    @NotNull
-    private List<String> getAspectEntities(@NotNull Aspect aspect) {
-        List<String> aspectEntityList = new ArrayList<>();
-
-        // Get the list of entities provided with the data
-        List<String> dataEntityList = lowercase(aspect.getEntityList());
-
-        // Get the annotations from WAT API
-        List<WATApi.Annotation> watEntityList = WATApi.EntityLinker.getAnnotations(aspect.getContent(),0);
-
-        if (!watEntityList.isEmpty()) {
-
-            for (WATApi.Annotation annotation : watEntityList) {
-                dataEntityList.add(annotation.getWikiTitle().toLowerCase());
-            }
-        }
-        return dataEntityList;
     }
 
     /**
@@ -494,30 +519,6 @@ public class Experiment2 {
         tokenStream.close();
     }
 
-    /**
-     * Returns all entities in the context.
-     * @param context Context
-     * @return List
-     */
-
-    @NotNull
-    private List<String> getEntities(@NotNull Context context) {
-
-        // Use entities provided with the data
-
-        List<String> entityList = lowercase(context.getEntityList());
-        String content = context.getContent();
-
-        // But also use entities annotated with WAT API.
-        List<WATApi.Annotation> annotationList = WATApi.EntityLinker.getAnnotations(content,0.1);
-        if (! annotationList.isEmpty()) {
-            for (WATApi.Annotation annotation : annotationList) {
-                entityList.add(annotation.getWikiTitle().toLowerCase());
-            }
-        }
-
-        return entityList;
-    }
 
     /**
      * Returns a lowercase version of the passed-in list of strings.
@@ -545,13 +546,17 @@ public class Experiment2 {
         String dataDir = args[1];
         String outputDir = args[2];
         String jsonFile = args[3];
-        String runFile = args[4];
-        String idFile = args[5];
-        String a = args[6];
-        String s = args[7];
+        String contextEntityFile = args[4];
+        String aspectEntityFile = args[5];
+        String runFile = args[6];
+        String accuracyFile = args[7];
+        String rel = args[8];
+        String a = args[9];
+        String s = args[10];
 
         Analyzer analyzer = null;
         Similarity similarity = null;
+        boolean useRelatedness = false;
 
         switch (a) {
             case "std" :
@@ -600,7 +605,12 @@ public class Experiment2 {
                 System.out.println("Wrong choice of similarity! Program end.");
                 System.exit(1);
         }
-        new Experiment2(indexDir, dataDir, outputDir, jsonFile, runFile, idFile, analyzer, similarity);
+
+        if (rel.equalsIgnoreCase("true")) {
+            useRelatedness = true;
+        }
+        new Experiment2(indexDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
+                runFile, accuracyFile, useRelatedness, analyzer, similarity);
 
 
     }
