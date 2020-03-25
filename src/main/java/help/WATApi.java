@@ -2,6 +2,7 @@ package help;
 
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -29,12 +30,13 @@ public class WATApi {
 
     public static class Annotation {
 
-        String wikiTitle;
-        int wikiId, start, end;
-        double rho;
+        private final String spot, wikiTitle;
+        private final int wikiId, start, end;
+        private final double rho;
 
         /**
          * Constructor.
+         * @param spot String Annotated text
          * @param wikiId Integer Wikipedia ID of the page the entity links to.
          * @param wikiTitle String Wikipedia page title of the page the entity links to.
          * @param start Integer Character offset (included)
@@ -42,7 +44,8 @@ public class WATApi {
          * @param rho Double Annotation accuracy
          */
 
-        private Annotation(int wikiId, String wikiTitle, int start, int end, double rho) {
+        private Annotation(String spot, int wikiId, String wikiTitle, int start, int end, double rho) {
+            this.spot = spot;
             this.wikiId = wikiId;
             this.wikiTitle = wikiTitle;
             this.start = start;
@@ -72,6 +75,10 @@ public class WATApi {
             return rho;
         }
 
+        public String getSpot() {
+            return spot;
+        }
+
         ///////////////////////////////////////////////////////////////////////////
 
     }
@@ -93,11 +100,16 @@ public class WATApi {
         @NotNull
         private static ArrayList<Annotation> getAnnotations(String data) {
             ArrayList<Annotation> annotations = new ArrayList<>();
-            Document doc;
+            Document doc = null;
 
             try {
 
                 doc = getDocument(data);
+
+                if (doc == null) {
+                    System.err.println("ERROR: Server returned null.");
+                    return annotations;
+                }
 
                 if (doc.text() != null) {
                     JSONObject json = new JSONObject(doc.text());
@@ -107,21 +119,38 @@ public class WATApi {
 
                             JSONObject jsonObject = jsonArray.getJSONObject(i);
 
-                            String wikiTitle = jsonObject.getString("title");
-                            int wikiId = jsonObject.getInt("id");
-                            int start = jsonObject.getInt("start");
-                            int end = jsonObject.getInt("end");
-                            double rho = jsonObject.getDouble("rho");
+                            String wikiTitle = jsonObject.has("title")
+                                    ? jsonObject.getString("title")
+                                    : "";
 
-                            annotations.add(new Annotation(wikiId, wikiTitle, start, end, rho));
+                            int wikiId = jsonObject.has("id")
+                                    ? jsonObject.getInt("id")
+                                    : 0;
 
+                            int start = jsonObject.has("start")
+                                    ? jsonObject.getInt("start")
+                                    : 0;
+
+                            int end = jsonObject.has("end")
+                                    ? jsonObject.getInt("end")
+                                    : 0;
+
+                            double rho = jsonObject.has("rho")
+                                    ? jsonObject.getDouble("rho")
+                                    : 0.0d;
+
+                            String spot = jsonObject.has("spot")
+                                    ? jsonObject.getString("spot")
+                                    : "";
+
+                            annotations.add(new Annotation(spot, wikiId, wikiTitle, start, end, rho));
                         }
                     } else {
                         System.err.println("ERROR: WAT could not find any annotations.");
                     }
                 }
             } catch (JSONException e) {
-                System.err.print("ERROR: JSONException");
+                System.err.println("ERROR in EntityLinker.getAnnotations(): " + e.getClass().getCanonicalName());
                 return annotations;
             }
             return annotations;
@@ -150,8 +179,9 @@ public class WATApi {
          * @return Document Jsoup document
          */
 
+        @Nullable
         private static Document getDocument(String data) {
-            Document doc = null;
+            Document doc;
             try {
                 doc = Jsoup.connect(URL)
                         .data("lang", "en")
@@ -160,10 +190,12 @@ public class WATApi {
                         .data("tokenizer", "nlp4j")
                         .data("debug", "9")
                         .data("method", "spotter:includeUserHint=true:includeNamedEntity=true:includeNounPhrase=true,prior:k=50,filter-valid,centroid:rescore=true,topk:k=5,voting:relatedness=lm,ranker:model=0046.model,confidence:model=pruner-wiki.linear")
+                        .timeout(20000)
                         .ignoreContentType(true)
                         .get();
             } catch (IOException e) {
-                e.printStackTrace();
+                System.err.println("ERROR in EntityLinker.getDocument(): " + e.getClass().getCanonicalName());
+                return null;
             }
             return doc;
         }
@@ -317,11 +349,12 @@ public class WATApi {
 
                         }
                     } else {
-                        System.err.println("ERROR: WAT could not find any annotations.");
+                        System.err.println("ERROR in EntityRelatedness.getRelatedness() : WAT could not find any annotations.");
                     }
                 }
             } catch (JSONException e) {
-                e.printStackTrace();
+                //e.printStackTrace();
+                System.err.println("ERROR in EntityRelatedness.getRelatedness(): " + e.getClass().getCanonicalName());
             }
 
             return relatedPairsList;
@@ -388,7 +421,7 @@ public class WATApi {
                     }
                 }
             } catch (JSONException e) {
-                e.printStackTrace();
+                System.err.println("ERROR in TitleResolver.getId(): " + e.getClass().getCanonicalName());
             }
             return id;
 
@@ -618,9 +651,51 @@ public class WATApi {
      */
 
     public static void main(@NotNull String[] args) {
-        int id = 1845551;
-        String title = pageIdToTitle(id);
-        System.out.println("ID: " + id + "\t" + "Title: " + title);
+//        int id = 1845551;
+//        String title = pageIdToTitle(id);
+//        System.out.println("ID: " + id + "\t" + "Title: " + title);
+
+//        String[] titles = {
+//                "World_War_I",
+//                "World_War_II",
+//        	    "Mike_Rann",
+//             	"Premier",
+//            	"National_Party_of_Australia",
+//            	"Government_of_Australia",
+//            	"Newspoll",
+//            	"Mike_Rann",
+//            	"Penny_(Canadian_coin)",
+//            	"Premier_of_Ontario",
+//            	"Penny_(Canadian_coin)",
+//            	"Two-party-preferred_vote"
+//        };
+
+        String[] titles = {
+                "Etymology",
+                "Anal_sex",
+                "Freedom_of_thought",
+                "Ancient_Greek",
+                "Pederasty_in_ancient_Greece"
+        };
+        //String entity1 = "South_Australian_state_election,_2010";
+        //String entity2 = "Newspoll";
+        String entity = "Pederasty_in_ancient_Greece";
+        int[] ids = new int[titles.length];
+        for (int i = 0; i < titles.length; i++) {
+            ids[i] = WATApi.TitleResolver.getId(titles[i]);
+        }
+        int eid = WATApi.TitleResolver.getId(entity);
+        System.out.println(entity + "\t" + eid);
+        //int eid2 = WATApi.TitleResolver.getId(entity2);
+
+        ArrayList<EntityRelatedness.Pair> relatedness = new ArrayList<>();
+        for (int id : ids) {
+            List<EntityRelatedness.Pair> pairs = WATApi.EntityRelatedness.getRelatedness("mw",id, eid);
+            relatedness.addAll(pairs);
+        }
+        for (EntityRelatedness.Pair pair : relatedness) {
+            System.out.println(pair);
+        }
 
     }
 

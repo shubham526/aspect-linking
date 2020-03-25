@@ -166,7 +166,7 @@ public class Utilities {
         for(String s : entity)
         {
             s = s.substring(s.indexOf(":")+1);
-            s = s.replaceAll("%20", "_").toLowerCase();
+            s = s.replaceAll("%20", "_");
             list.add(s);
         }
         return list;
@@ -235,6 +235,7 @@ public class Utilities {
                 // Get the document corresponding to the paragraph from the lucene index
                 Document doc = Index.Search.searchIndex("id", paraId, searcher);
                 // Get the entities in the paragraph
+                assert doc != null;
                 String[] entityList = Utilities.clean(doc.getField("entity").stringValue().split(" "));
                 // Make an ArrayList from the String array
                 ArrayList<String> pEntList = new ArrayList<>(Arrays.asList(entityList));
@@ -320,7 +321,7 @@ public class Utilities {
      */
     @SuppressWarnings("unchecked")
 
-    public static <K, V>HashMap<K, V> readMap(String file) throws IOException, ClassNotFoundException {
+    public static <K, V>Map<K, V> readMap(String file) throws IOException, ClassNotFoundException {
         HashMap<K, V> mapInFile;
         ObjectInputStream ois = new ObjectInputStream(new FileInputStream(new File(file)));
         mapInFile = (HashMap<K,V>)ois.readObject();
@@ -356,7 +357,7 @@ public class Utilities {
      * @param <V> Value
      * @throws IOException
      */
-    public static <K,V> void writeMap(HashMap<K,V> map, String file) throws IOException {
+    public static <K,V> void writeMap(Map<K,V> map, String file) throws IOException {
 
         ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(new File(file)));
         oos.writeObject(map);
