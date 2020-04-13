@@ -18,7 +18,7 @@ import java.util.ArrayList;
 
 public class GoogleKGApi {
     private final static String URL = "https://kgsearch.googleapis.com/v1/entities:search";
-    private final static String KEY = "AIzaSyDsNR_C14cCMo0mZjqWUV5Tn7Mvv9yZIXY";
+    private final static String KEY = "xxxxx"; // INSERT KEY HERE
 
     /**
      * Inner class to represent a Google Knowledge Graph entity.

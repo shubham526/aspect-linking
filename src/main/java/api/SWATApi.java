@@ -24,7 +24,7 @@ import java.util.Map;
 
 public class SWATApi {
     private final static String URL = "https://swat.d4science.org/salience";
-    private final static String TOKEN = "8775ecea-90d0-4fca-89d3-e19c0790489f-843339462";
+    private final static String TOKEN = "XXXXX"; // INSERT KEY HERE
 
     /**
      * Returns a map of entities and salience score.
