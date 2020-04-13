@@ -1,4 +1,4 @@
-package help;
+package random;
 
 import org.jetbrains.annotations.NotNull;
 

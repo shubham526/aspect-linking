@@ -1,4 +1,4 @@
-package help;
+package api;
 
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
@@ -15,7 +15,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * This class uses the WAT Entity Linking System to annotate text with entities.
+ * ====================================================================================================================
+ * This class provides an interface to various components of the WAT Entity Linking System.
+ * The available systems are:
+ * (1) Entity Linking
+ * (2) Entity Relatedness
+ * (3) Title Resolver
+ * (4) Entity Surface Form Information
+ * In addition, it provides a method to map entity names to corresponding Wikipedia IDs. This is requires by the
+   WAT Entity Relatedness system.
+ * ====================================================================================================================
  * @author Shubham Chatterjee
  * @version 3/8/2020
  */
@@ -107,7 +116,7 @@ public class WATApi {
                 doc = getDocument(data);
 
                 if (doc == null) {
-                    System.err.println("ERROR: Server returned null.");
+                    //System.err.println("ERROR: Server returned null.");
                     return annotations;
                 }
 
@@ -190,7 +199,7 @@ public class WATApi {
                         .data("tokenizer", "nlp4j")
                         .data("debug", "9")
                         .data("method", "spotter:includeUserHint=true:includeNamedEntity=true:includeNounPhrase=true,prior:k=50,filter-valid,centroid:rescore=true,topk:k=5,voting:relatedness=lm,ranker:model=0046.model,confidence:model=pruner-wiki.linear")
-                        .timeout(20000)
+                        .timeout(50 * 1000)
                         .ignoreContentType(true)
                         .get();
             } catch (IOException e) {
@@ -316,7 +325,7 @@ public class WATApi {
 
                 doc = getDocument(relMeasure, ids);
 
-                if (doc.text() != null) {
+                if (doc != null) {
                     JSONObject json = new JSONObject(doc.text());
                     if (json.has("pairs")) {
                         JSONArray jsonArray = json.getJSONArray("pairs");
@@ -387,9 +396,9 @@ public class WATApi {
                 for (int id : ids) {
                     con.data("ids",Integer.toString(id));
                 }
-                doc = con.get();
+                doc = con.timeout(50 * 1000).get();
             } catch (IOException e) {
-                e.printStackTrace();
+                System.err.println("ERROR in EntityRelatedness.getDocument(): " + e.getClass().getCanonicalName());
             }
             return doc;
         }
@@ -412,7 +421,7 @@ public class WATApi {
 
                 doc = getDocument(title);
 
-                if (doc.text() != null) {
+                if (doc != null) {
                     JSONObject json = new JSONObject(doc.text());
                     if (json.has("wiki_id")) {
                         id = json.getInt("wiki_id");
@@ -435,9 +444,10 @@ public class WATApi {
                         .data("gcube-token", TOKEN)
                         .data("title", data)
                         .ignoreContentType(true)
+                        .timeout(50 * 10000)
                         .get();
             } catch (IOException e) {
-                e.printStackTrace();
+                System.err.println("ERROR in TitleResolver.getDocument(): " + e.getClass().getCanonicalName());
             }
             return doc;
         }
@@ -624,9 +634,10 @@ public class WATApi {
                         .data("gcube-token", TOKEN)
                         .data("text", data)
                         .ignoreContentType(true)
+                        .timeout(50 * 1000)
                         .get();
             } catch (IOException e) {
-                e.printStackTrace();
+                System.err.println("ERROR in EntitySurfaceFormInformation.getDocument(): " + e.getClass().getCanonicalName());
             }
             return doc;
         }

@@ -1,17 +1,21 @@
 package experiments;
 
-import help.SWATApi;
+import api.SWATApi;
 import help.Utilities;
 import json.Aspect;
 import json.Context;
 import json.JsonObject;
 import json.ReadJsonlFile;
+import me.tongfei.progressbar.ProgressBar;
 import org.jetbrains.annotations.NotNull;
 import org.json.simple.JSONObject;
 
 import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -20,7 +24,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *    (b) Pass content to SWAT. Get map of (entity,sal_score).
  * 2) Aspect candidates are the candidates we are trying to score.
  *   -- For Every aspect content, score the content by summing over the
- *      salience score of entities contained in it.
+ *      salience score of entities contained in it. Two variations:
+ *      > Use only salient entities
+ *      > Use all entities (salient and non-salient)
  *   -- The salience scores are obtained in Step-1 above.
  *   -- If there are no overlapping entities, then the score of the passage is 0.
  * ==============================================================================================
@@ -34,20 +40,39 @@ public class Experiment1 {
     private Map<String, HashMap<String, HashMap<String, Integer>>> aspectEntityMap = new HashMap<>();
     private final AtomicInteger counter = new AtomicInteger();
     private final ArrayList<String> runFileStrings = new ArrayList<>();
-    private final ConcurrentHashMap<String, Integer> accuracyMap = new ConcurrentHashMap<>();
-    private final List<Double> accuracyList = new ArrayList<>();
+    private final String mode, contextType;
+    private final boolean parallel;
 
-    public Experiment1(String dataDir,
+    public Experiment1(String mainDir,
+                       String dataDir,
                        String outputDir,
                        String jsonFile,
                        String aspectEntityFile,
                        String runFile,
-                       String accuracyFile) {
+                       String contextType,
+                       @NotNull String mode,
+                       boolean parallel) {
 
-        String jsonFilePath = dataDir + "/" + jsonFile;
-        String aspectEntityFilePath = dataDir + "/" + aspectEntityFile;
-        String runFilePath = outputDir + "/" + runFile;
-        String accuracyFilePath = outputDir + "/" + accuracyFile;
+        String jsonFilePath = mainDir + "/" + dataDir + "/" + jsonFile;
+        String aspectEntityFilePath = mainDir + "/" + dataDir + "/" + aspectEntityFile;
+        String runFilePath = mainDir + "/" + outputDir + "/" + runFile;
+        this.mode = mode;
+        this.parallel = parallel;
+        this.contextType = contextType;
+
+        if (mode.equalsIgnoreCase("all")) {
+            System.out.println("Using all entities.");
+        } else {
+            System.out.println("Using salient entities.");
+        }
+
+        if (contextType.equalsIgnoreCase("sent")) {
+            System.out.println("Context: Sentence");
+        } else if (contextType.equalsIgnoreCase("para")) {
+            System.out.println("Context: Paragraph");
+        } else {
+            System.out.println("Context: Section");
+        }
 
         System.out.print("Reading JSON-L file....");
         List<JSONObject> jsonObjectList = ReadJsonlFile.read(jsonFilePath);
@@ -61,15 +86,7 @@ public class Experiment1 {
         }
         System.out.println("[Done].");
 
-        score(runFilePath, jsonObjectList);
-
-        System.out.print("Saving accuracy values...");
-        try {
-            Utilities.writeList(accuracyList, accuracyFilePath);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        System.out.println("[Done].");
+        score(runFilePath, jsonObjectList, contextType);
     }
 
     /**
@@ -78,43 +95,64 @@ public class Experiment1 {
      * @param jsonObjectList List List of JSON objects read from file.
      */
 
-    private void score(String runFilePath, @NotNull List<JSONObject> jsonObjectList) {
+    private void score(String runFilePath, @NotNull List<JSONObject> jsonObjectList, String contextType) {
 
-        double accuracy;
+        if (parallel) {
+            System.out.println("Using Parallel Streams.");
+            int parallelism = ForkJoinPool.commonPool().getParallelism();
+            int numOfCores = Runtime.getRuntime().availableProcessors();
+            System.out.println("Number of available processors = " + numOfCores);
+            System.out.println("Number of threads generated = " + parallelism);
 
-        // Do in parallel
-        jsonObjectList.parallelStream().forEach(this::doTask);
+            if (parallelism == numOfCores - 1) {
+                System.err.println("WARNING: USING ALL AVAILABLE PROCESSORS");
+                System.err.println("USE: \"-Djava.util.concurrent.ForkJoinPool.common.parallelism=N\" " +
+                        "to set the number of threads used");
+            }
+            // Do in parallel
+            jsonObjectList.parallelStream().forEach(jsonObject -> doTask(jsonObject, contextType));
+        } else {
+            System.out.println("Using Sequential Streams.");
 
-        // Do in serial
-//        for (JSONObject jsonObject : jsonObjectList) {
-//            doTask(jsonObject);
-//        }
-
-        accuracy = findAccuracy();
-        System.out.println("Final Accuracy = " + accuracy);
+            // Do in serial
+            ProgressBar pb = new ProgressBar("Progress", jsonObjectList.size());
+            for (JSONObject jsonObject : jsonObjectList) {
+                doTask(jsonObject, contextType);
+                pb.step();
+            }
+            pb.close();
+        }
 
         System.out.print("Writing to run file...");
         Utilities.writeFile(runFileStrings, runFilePath);
         System.out.println("[Done].");
+        System.out.println("Run file written to: " + runFilePath);
 
-        System.out.println("Could not find salient entities for " + counter + " of " + jsonObjectList.size() + " mentions");
+        if (mode.equalsIgnoreCase("all")) {
+            System.out.println("Could not find any entities for " + counter + " of " + jsonObjectList.size() + " mentions");
+        } else {
+            System.out.println("Could not find salient entities for " + counter + " of " + jsonObjectList.size() + " mentions");
+        }
         System.out.println("Done");
     }
 
-    private void doTask(JSONObject jsonObject) {
+    private void doTask(JSONObject jsonObject, @NotNull String contextType) {
 
         Map<String, Map<String, Double>> rankings = new HashMap<>(); // Map to store the rankings
         Map<String, Double> paraScoreMap; // Inner map
 
         String entityID = JsonObject.getEntityId(jsonObject);
         String mention = JsonObject.getMention(jsonObject);
+        Context context;
 
-        // Get the paragraph context of the mention
-
-        /*
-         * MODIFY THIS LINE TO USE EITHER getSentenceContext(), getParaContext() OR getSectionContext().
-         */
-        Context context = JsonObject.getSectionContext(jsonObject);
+        // Get the correct context based on argument
+        if (contextType.equalsIgnoreCase("sent")) {
+            context = JsonObject.getSentenceContext(jsonObject);
+        } else if (contextType.equalsIgnoreCase("para")) {
+            context = JsonObject.getParaContext(jsonObject);
+        } else {
+            context = JsonObject.getSectionContext(jsonObject);
+        }
 
         // Get the list of candidate aspects for the mention
         List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
@@ -141,8 +179,7 @@ public class Experiment1 {
             rankings.put(JsonObject.getIdContext(jsonObject), paraScoreMap);
         }
         makeRunFileStrings(rankings);
-        findAccuracy(jsonObject, paraScoreMap);
-        System.out.println("Mention :" + mention + "\t" + "Accuracy: "  + findAccuracy());
+        System.out.println("Done: " + mention);
 
     }
 
@@ -163,7 +200,8 @@ public class Experiment1 {
             rank = 1;
             for (String idAspect : scoreMap.keySet()) {
                 runFileString = idContext + " " + "0" + " " + idAspect + " " +
-                        rank++ + " " + scoreMap.get(idAspect) + " " + "salience-sec-context" ;
+                        rank++ + " " + scoreMap.get(idAspect) + " " + "salience-" +  contextType + "-context-"
+                        + mode + "-entities";
                 runFileStrings.add(runFileString);
             }
         }
@@ -187,13 +225,14 @@ public class Experiment1 {
         String content = context.getContent(); // Get the content of the context
 
         // Use SWAT to find the salient entities in the context
-        Map<String, Double> salientEntities = SWATApi.getSalientEntities(content);
+        Map<String, Double> swatAnnotations = SWATApi.getEntities(content, mode);
+
 
         // If any salient entities were found then
-        if (salientEntities != null) {
+        if (! swatAnnotations.isEmpty()) {
 
             // Get the list of salient entities. But first lowercase them all.
-            List<String> salientEntityList = lowercase(new ArrayList<>(salientEntities.keySet()));
+            List<String> swatEntityList = new ArrayList<>(swatAnnotations.keySet());
 
             // For every candidate aspect
             for (Aspect aspect : candidateAspects) {
@@ -206,7 +245,7 @@ public class Experiment1 {
 
                 // Find any common entities between the list of salient entities for the context and the aspect.
                 // Basically, we are finding how many aspect entities are salient in the context.
-                List<String> common = Utilities.intersection(salientEntityList, aspectEntityList);
+                List<String> common = Utilities.intersection(swatEntityList, aspectEntityList);
 
                 // Is there anything common between the two?
                 // If yes, then calculate the score of the candidate aspect.
@@ -214,7 +253,7 @@ public class Experiment1 {
                 // Add the id_context and its score to the map.
                 // Otherwise, add a score of zero.
                 if (!common.isEmpty()) {
-                    score = sum(common, salientEntities);
+                    score = sum(common, swatAnnotations);
                     paraScoreMap.put(aspectId, score);
                 } else {
                     paraScoreMap.put(aspectId, 0.0d);
@@ -242,20 +281,18 @@ public class Experiment1 {
     private List<String> getAspectEntityList(String entityID, @NotNull Aspect aspect) {
 
         // Use all the entities provided with the aspect in the data.
-        List<String> aspectEntityList = lowercase(aspect.getEntityList());
+        List<String> aspectEntityList = aspect.getEntityList();
 
         // But also use the entities in the content.
         HashMap<String, Integer> aspectEntities = aspectEntityMap.get(entityID).get(aspect.getId());
-        for (String aspectEntity : aspectEntities.keySet()) {
-            aspectEntityList.add(aspectEntity.toLowerCase());
-        }
+        aspectEntityList.addAll(aspectEntities.keySet());
         return aspectEntityList;
     }
 
-    private double sum(@NotNull List<String> common, Map<String, Double> salientEntities) {
+    private double sum(@NotNull List<String> common, Map<String, Double> swatEntities) {
         double sum = 0.0d;
         for (String e : common) {
-            sum += salientEntities.get(e);
+            sum += swatEntities.get(e);
         }
         return sum;
     }
@@ -270,44 +307,29 @@ public class Experiment1 {
         return newList;
     }
 
-    private double findAccuracy() {
-        double accuracy;
-
-        int totalMentions = accuracyMap.size();
-        int totalCorrect = Collections.frequency(accuracyMap.values(), 1);
-        accuracy = (double)totalCorrect / totalMentions;
-        accuracyList.add(accuracy);
-        return accuracy;
-    }
-
-    private void findAccuracy(JSONObject jsonObject,
-                              @NotNull Map<String, Double> finalScores) {
-
-        String correctAspectId = JsonObject.getCorrectAspectId(jsonObject);
-        String mention = JsonObject.getMention(jsonObject);
-        Map.Entry<String, Double> entry = finalScores.entrySet().iterator().next();
-        String predictedAspectId = entry.getKey();
-
-        if (correctAspectId.equalsIgnoreCase(predictedAspectId)) {
-            accuracyMap.put(mention, 1);
-        } else {
-            accuracyMap.put(mention, 0);
-        }
-    }
-
     /**
      * Main method.
      * @param args Command Line Arguments.
      */
 
     public static void main(@NotNull String[] args) {
-        String dataDir = args[0];
-        String outputDir = args[1];
-        String jsonFile = args[2];
-        String aspectEntityFile = args[3];
-        String runFile = args[4];
-        String accuracyFile = args[5];
-        new Experiment1(dataDir, outputDir, jsonFile, aspectEntityFile, runFile, accuracyFile);
+        String mainDir = args[0];
+        String dataDir = args[1];
+        String outputDir = args[2];
+        String jsonFile = args[3];
+        String aspectEntityFile = args[4];
+        String contextType = args[5];
+        String mode = args[6];
+        String p = args[7];
+
+        boolean parallel = false;
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
+
+        String runFile = "salience-" +  contextType + "-context-" + mode + "-entities.run";
+
+        new Experiment1(mainDir, dataDir, outputDir, jsonFile, aspectEntityFile, runFile, contextType, mode, parallel);
     }
 
 }

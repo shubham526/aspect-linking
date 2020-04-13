@@ -1,5 +1,6 @@
 package help;
 
+import json.Aspect;
 import lucene.Index;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -183,6 +184,21 @@ public class Utilities {
         return list;
     }
 
+    @NotNull
+    public static String unprocess(@NotNull String e) {
+        String[] arr = e.split("_");
+        StringBuilder sb = new StringBuilder();
+        sb.append("enwiki:");
+
+        for (String s : arr) {
+            sb.append(Character.toUpperCase(s.charAt(0)))
+                    .append(s.substring(1))
+                    .append(" ");
+        }
+        String s = sb.toString().trim();
+        return s.replaceAll(" ", "%20");
+    }
+
     /**
      * Method to find the frequency of an entity in the list of entities.
      * @param e Entity to search
@@ -296,7 +312,8 @@ public class Utilities {
      * @param d PseudoDocument
      * @return Document
      */
-    public static Document pseudoDocToDoc(@NotNull PseudoDocument d) {
+    @NotNull
+    public static Document toLuceneDoc(@NotNull PseudoDocument d) {
         Document doc = new Document();
         StringBuilder text = new StringBuilder(); // To store the text of the pseudo-document
         ArrayList<Document> documents = d.getDocumentList(); // Get the list of documents in the pseudo-document
@@ -307,6 +324,19 @@ public class Utilities {
         }
         doc.add(new TextField("text", text.toString(), Field.Store.YES)); // Add the text as a field
         doc.add(new StringField("entity", d.getEntity(), Field.Store.YES)); // Add the entity as a field
+        return doc; // return the document
+    }
+
+    /**
+     * Converts an Aspect to a Lucene Document.
+     * @param aspect Aspect
+     * @return Document
+     */
+    @NotNull
+    public static Document toLuceneDoc(@NotNull Aspect aspect) {
+        Document doc = new Document();
+        doc.add(new TextField("text", aspect.getContent(), Field.Store.YES));
+        doc.add(new StringField("id", aspect.getId(), Field.Store.YES));
         return doc; // return the document
     }
 
@@ -322,9 +352,9 @@ public class Utilities {
     @SuppressWarnings("unchecked")
 
     public static <K, V>Map<K, V> readMap(String file) throws IOException, ClassNotFoundException {
-        HashMap<K, V> mapInFile;
+        Map<K, V> mapInFile;
         ObjectInputStream ois = new ObjectInputStream(new FileInputStream(new File(file)));
-        mapInFile = (HashMap<K,V>)ois.readObject();
+        mapInFile = (Map<K,V>)ois.readObject();
 
         ois.close();
         return mapInFile;

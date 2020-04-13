@@ -1,5 +1,7 @@
 package lucene;
 
+import help.Utilities;
+import json.Aspect;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.index.DirectoryReader;
@@ -18,6 +20,7 @@ import org.jetbrains.annotations.NotNull;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Class to make a RAM index.
@@ -28,7 +31,8 @@ import java.util.List;
  */
 public class RAMIndex {
 
-    public static HashMap<Document, Float> searchIndex(String query, int n, IndexSearcher is, QueryParser qp) {
+    @NotNull
+    public static HashMap<Document, Float> searchIndex(String query, int n, IndexSearcher is, @NotNull QueryParser qp) {
         HashMap<Document,Float> results = new HashMap<>();
         // Parse the query
         Query q = null;
@@ -45,7 +49,12 @@ public class RAMIndex {
             e.printStackTrace();
         }
         // Retrieve the results
-        ScoreDoc[] retDocs = tds.scoreDocs;
+        ScoreDoc[] retDocs = new ScoreDoc[0];
+        if (tds != null) {
+            retDocs = tds.scoreDocs;
+        } else {
+            return results;
+        }
         for (int i = 0; i < retDocs.length; i++) {
             try {
                 Document doc = is.doc(retDocs[i].doc);
@@ -64,8 +73,9 @@ public class RAMIndex {
      * @param n Integer Top hits for the query
      * @return HashMap where Key = Document and Value = Score
      */
-    public static HashMap<Document,Float> searchIndex(BooleanQuery query, int n, @NotNull IndexSearcher is) {
-        HashMap<Document,Float> results = new HashMap<>();
+    @NotNull
+    public static Map<String, Double> searchIndex(BooleanQuery query, int n, @NotNull IndexSearcher is) {
+        Map<String, Double> results = new HashMap<>();
 
         // Search the query
         TopDocs tds = null;
@@ -75,12 +85,17 @@ public class RAMIndex {
             e.printStackTrace();
         }
         // Retrieve the results
-        ScoreDoc[] retDocs = tds.scoreDocs;
+        ScoreDoc[] retDocs = new ScoreDoc[0];
+        if (tds != null) {
+            retDocs = tds.scoreDocs;
+        } else {
+            return results;
+        }
         for (int i = 0; i < retDocs.length; i++) {
             try {
                 Document doc = is.doc(retDocs[i].doc);
-                float score = tds.scoreDocs[i].score;
-                results.put(doc, score);
+                double score = tds.scoreDocs[i].score;
+                results.put(doc.get("id"), score);
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -88,21 +103,27 @@ public class RAMIndex {
         return results;
     }
 
-    /**
-     * Build an in-memory index of documents passed as parameters.
-     * @param documents The documents to index
-     * @throws IOException
-     */
-    public static void createIndex(@NotNull List<Document> documents, IndexWriter iw) throws IOException {
-        for (Document d : documents) {
+
+    public static void createIndex(@NotNull List<Aspect> aspects, IndexWriter iw) {
+        for (Aspect aspect : aspects) {
+
+            // Convert the aspect to Lucene document
+            Document document = Utilities.toLuceneDoc(aspect);
+
+            // Index the document
             try {
-                iw.addDocument(d);
+                iw.addDocument(document);
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
-        iw.commit();
-        iw.close();
+        try {
+            iw.commit();
+            iw.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
     }
 
     /**
