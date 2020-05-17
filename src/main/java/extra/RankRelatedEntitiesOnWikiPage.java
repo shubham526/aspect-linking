@@ -1,22 +1,17 @@
-package experiments;
-
+package extra;
 
 import api.WATApi;
-import help.EntityRMExpand;
 import help.Utilities;
 import json.Aspect;
 import json.JsonObject;
 import json.ReadJsonlFile;
 import lucene.Index;
-import lucene.RAMIndex;
 import me.tongfei.progressbar.ProgressBar;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
-import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.queryparser.classic.ParseException;
-import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMDirichletSimilarity;
@@ -25,37 +20,20 @@ import org.apache.lucene.search.similarities.Similarity;
 import org.jetbrains.annotations.NotNull;
 import org.json.simple.JSONObject;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 
-/**
- * ==============================================Experiment-6========================================
- * (1) Use the entities on the Wikipedia page of the entity mention.
- * (2) Find a distribution over these page entities using relatedness. Rank these entities using relatedness.
- * (3) Treat Query = EntityName and expand he query using top-K related entities in (2).
- * (4) Maintain an in-memory index of aspects and retrieve aspects using expanded query in (3).
- * ===========================================================================================
- *
- * @author Shubham Chatterjee
- * @version 03/28/2020
- */
-
-public class Experiment6 {
+public class RankRelatedEntitiesOnWikiPage {
     private final IndexSearcher pageIndexSearcher;
     // ArrayList of run strings
     private final ArrayList<String> runFileStrings = new ArrayList<>();
     private Map<String, HashMap<String, Integer>> contextEntityMap = new ConcurrentHashMap<>();
-    private final int takeKEntities; // Number of query expansion terms
-    private final boolean omitQueryTerms; // Omit query terms or not when calculating expansion terms
-    private final Analyzer analyzer; // Analyzer to use
     private String relType;
-    private final boolean parallel;
+    boolean parallel;
 
-    public Experiment6(String pageIndexDir,
+    public RankRelatedEntitiesOnWikiPage(String pageIndexDir,
                        String mainDir,
                        String dataDir,
                        String outputDir,
@@ -64,19 +42,14 @@ public class Experiment6 {
                        String outFile,
                        boolean parallel,
                        @NotNull String relType,
-                       int takeKEntities,
-                       boolean omitQueryTerms,
                        Analyzer analyzer,
                        Similarity similarity) {
 
 
-        String contextEntityFilePath = mainDir + "/" + dataDir + "/" + contextEntityFile;
         String jsonFilePath = mainDir + "/" + dataDir + "/"  + jsonFile;
+        String contextEntityFilePath = mainDir + "/" + dataDir + "/" + contextEntityFile;
         String outputFilePath = mainDir + "/" + outputDir + "/" + outFile;
         this.parallel = parallel;
-        this.takeKEntities = takeKEntities;
-        this.analyzer = analyzer;
-        this.omitQueryTerms = omitQueryTerms;
 
         if (relType.equalsIgnoreCase("mw")) {
             System.out.println("Entity Similarity Measure: Milne-Witten");
@@ -120,7 +93,6 @@ public class Experiment6 {
 
         score(outputFilePath, jsonObjectList);
 
-
     }
 
     private void score(String runFilePath, @NotNull List<JSONObject> jsonObjectList) {
@@ -154,106 +126,23 @@ public class Experiment6 {
         System.out.print("Writing to run file...");
         Utilities.writeFile(runFileStrings, runFilePath);
         System.out.println("[Done].");
-        System.out.println("Runfile written to: " + runFilePath);
 
     }
+
     private void doTask(JSONObject jsonObject) {
         String entityID = JsonObject.getEntityId(jsonObject);
+        String entityMention = JsonObject.getMention(jsonObject);
         String idContext = JsonObject.getIdContext(jsonObject);
         List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
 
-        Map<String, Double> aspectScores;
-        List<Map.Entry<String, Double>> pageEntityList;
+        Map<String, Double> pageEntityDistribution;
 
         // Get the list of all entities on the Wikipedia page of this entity.
-        pageEntityList = getPageEntities(entityID, idContext);
+        pageEntityDistribution = getPageEntityDistribution(entityID, idContext);
 
-        // Score the aspects
-        aspectScores = scoreAspects(jsonObject, pageEntityList, candidateAspects);
-
-        makeRunFileStrings(jsonObject, aspectScores);
-    }
-
-    @NotNull
-    private Map<String, Double> scoreAspects(JSONObject jsonObject,
-                                             @NotNull List<Map.Entry<String, Double>> pageEntityList,
-                                             @NotNull List<Aspect> candidateAspects) {
-
-        Map<String, Double> aspectScores = new HashMap<>();
-        List<Map.Entry<String, Double>> expansionEntities;
-        String entityID = JsonObject.getEntityId(jsonObject);
-        int n = candidateAspects.size();
-
-        // Use the top K entities for expansion
-        expansionEntities = pageEntityList.subList(0, Math.min(takeKEntities, pageEntityList.size()));
-
-        if (expansionEntities.size() == 0) {
-            return aspectScores;
-        }
-
-
-        //////////////////////////////////////Build the index of aspects/////////////////////////////////
-
-        // First create the IndexWriter
-        IndexWriter iw = RAMIndex.createWriter(new EnglishAnalyzer());
-
-        // Now create the index
-        RAMIndex.createIndex(candidateAspects, iw);
-
-        // Create the IndexSearcher
-        IndexSearcher is = null;
-        try {
-            is = RAMIndex.createSearcher(new BM25Similarity(), iw);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        /////////////////////////////////////////////////////////////////////////////////////////////////
-
-        ///////////////////////////// Search the index for the query/////////////////////////////////////
-
-        // First process the query
-        String queryStr = entityID
-                .substring(entityID.indexOf(":") + 1)          // remove enwiki: from query
-                .replaceAll("%20", " ")     // replace %20 with whitespace
-                .toLowerCase();                            //  convert query to lowercase
-
-        // Convert the query to an expanded BooleanQuery
-        BooleanQuery booleanQuery = null;
-        try {
-            booleanQuery = EntityRMExpand.toEntityRmQuery(queryStr, expansionEntities, omitQueryTerms,
-                    "text", analyzer);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        // Now search the query
-        assert is != null;
-        aspectScores = Utilities.sortByValueDescending(RAMIndex.searchIndex(booleanQuery, n, is));
-
-        // Close the aspect index
-        try {
-            RAMIndex.close(iw);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        //////////////////////////////////////////////////////////////////////////////////////////////////
-
-        return aspectScores;
-    }
-
-    private void makeRunFileStrings(JSONObject jsonObject,
-                                    @NotNull Map<String, Double> scoreMap) {
-        String runFileString;
-        String idContext = JsonObject.getIdContext(jsonObject);
-        int rank = 1;
-        String info = "6-qe-rel-page-entity-" + relType;
-        Map<String, Double> sortedScoreMap = Utilities.sortByValueDescending(scoreMap);
-
-        for (String idAspect : sortedScoreMap.keySet()) {
-            runFileString = idContext + " " + "0" + " " + idAspect + " " +
-                    rank++ + " " + sortedScoreMap.get(idAspect) + " "+ info ;
-            runFileStrings.add(runFileString);
+        makeRunFileStrings(candidateAspects, pageEntityDistribution);
+        if (parallel) {
+            System.out.println("Done: " + entityMention);
         }
     }
 
@@ -264,7 +153,7 @@ public class Experiment6 {
      */
 
     @NotNull
-    private List<Map.Entry<String, Double>> getPageEntities(String entityID, String idContext) {
+    private Map<String, Double> getPageEntityDistribution(String entityID, String idContext) {
         Map<String, Double> pageEntityDistribution = new HashMap<>();
         String wikiEntityID = "enwiki:" + entityID;
 
@@ -277,15 +166,24 @@ public class Experiment6 {
 
             // Make a list from this string
             String[] entityArray = entityString.split("\n");
-            for (String eid : entityArray) {
-                double rel = getRelatedness(wikiEntityID, idContext, eid);
-                pageEntityDistribution.put(eid, rel);
-            }
+
+            getRelatednessDistribution(wikiEntityID, idContext, entityArray, pageEntityDistribution);
+
+
 
         } catch (IOException | ParseException e) {
             e.printStackTrace();
         }
-        return new ArrayList<>(Utilities.sortByValueDescending(pageEntityDistribution).entrySet());
+        return Utilities.sortByValueDescending(pageEntityDistribution);
+    }
+
+    private void getRelatednessDistribution(String wikiEntityID, String idContext,
+                                            @NotNull String[] entityArray, Map<String, Double> pageEntityDistribution) {
+
+        for (String eid : entityArray) {
+            double rel = getRelatedness(wikiEntityID, idContext, eid);
+            pageEntityDistribution.put(process(eid), rel);
+        }
     }
 
     /**
@@ -336,22 +234,35 @@ public class Experiment6 {
         }
     }
 
-    /**
-     * Main method to run the code.
-     * @param args Command line parameters.
-     */
+    private void makeRunFileStrings(@NotNull List<Aspect> candidateAspects,
+                                    @NotNull Map<String, Double> scoreMap) {
+        String runFileString;
+        int rank = 1;
+        String info = "rel";
+        Map<String, Double> sortedScoreMap = Utilities.sortByValueDescending(scoreMap);
+
+        for (Aspect aspect : candidateAspects) {
+            String aspectId = aspect.getId();
+            for (String idAspect : sortedScoreMap.keySet()) {
+                runFileString = aspectId + " " + "0" + " " + idAspect + " " +
+                        rank++ + " " + sortedScoreMap.get(idAspect) + " "+ info ;
+                if (!runFileStrings.contains(runFileString)) {
+                    runFileStrings.add(runFileString);
+                }
+            }
+
+        }
+
+    }
+    public String process(String entityID) {
+        entityID = entityID.substring(entityID.indexOf(":")+1);
+        entityID = entityID.replaceAll("%20", "_");
+        return entityID;
+    }
 
     public static void main(@NotNull String[] args) {
-
         Similarity similarity = null;
         Analyzer analyzer = null;
-        boolean omit;
-        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-        StringBuilder outFile = new StringBuilder();
-        String relType = "";
-        boolean parallel = false;
-
-        outFile.append("qe-rel-ent-page").append("-");
 
         String pageIndexDir = args[0];
         String mainDir = args[1];
@@ -360,13 +271,11 @@ public class Experiment6 {
         String jsonFile = args[4];
         String contextEntityFile = args[5];
         String p = args[6];
-        int takeKEntities = Integer.parseInt(args[7]);
-        String o = args[8];
-        omit = o.equalsIgnoreCase("y") || o.equalsIgnoreCase("yes");
-        String a = args[9];
-        String sim = args[10];
+        String a = args[7];
+        String sim = args[8];
 
-        System.out.printf("Using %d entities for query expansion\n", takeKEntities);
+        String relType = "", runFile = "";
+        boolean parallel = false;
 
 
         switch (a) {
@@ -388,17 +297,15 @@ public class Experiment6 {
             case "bm25":
                 similarity = new BM25Similarity();
                 System.out.println("Similarity: BM25");
-                outFile.append("bm25");
                 break;
             case "LMJM":
             case "lmjm":
                 System.out.println("Similarity: LMJM");
                 float lambda;
                 try {
-                    lambda = Float.parseFloat(args[11]);
+                    lambda = Float.parseFloat(args[9]);
                     System.out.println("Lambda = " + lambda);
                     similarity = new LMJelinekMercerSimilarity(lambda);
-                    outFile.append("lmjm");
                 } catch (IndexOutOfBoundsException e) {
                     System.out.println("Missing lambda value for similarity LM-JM");
                     System.exit(1);
@@ -408,25 +315,13 @@ public class Experiment6 {
             case "lmds":
                 System.out.println("Similarity: LMDS");
                 similarity = new LMDirichletSimilarity();
-                outFile.append("lmds");
                 break;
 
             default:
                 System.out.println("Wrong choice of similarity! Exiting.");
                 System.exit(1);
         }
-        outFile.append("-");
-
-        if (omit) {
-            System.out.println("Using RM1");
-            outFile.append("rm1");
-        } else {
-            System.out.println("Using RM3");
-            outFile.append("rm3");
-        }
-        outFile.append(".run");
-        System.out.println("Output File: " + outFile.toString());
-
+        Scanner sc = new Scanner(System.in);
         System.out.println("Enter the entity relation type to use. Your choices are:");
         System.out.println("mw (Milne-Witten)");
         System.out.println("jaccard (Jaccard measure of pages outlinks)");
@@ -436,17 +331,17 @@ public class Experiment6 {
         System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
         System.out.println("pmi (Pointwise Mutual Information)");
         System.out.println("Enter you choice:");
-        try {
-            relType = br.readLine();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        relType = sc.nextLine();
+
         if (p.equalsIgnoreCase("true")) {
             parallel = true;
         }
 
-        new Experiment6(pageIndexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile,
-                outFile.toString(), parallel, relType, takeKEntities, omit, analyzer, similarity);
+        runFile = "wiki-page.run";
+        new RankRelatedEntitiesOnWikiPage(pageIndexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile,
+                runFile, parallel, relType, analyzer, similarity);
 
     }
 }
+
+

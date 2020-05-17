@@ -1,12 +1,13 @@
 package experiments;
 
+import api.WATApi;
 import help.PseudoDocument;
 import help.Utilities;
-import api.WATApi;
 import json.Aspect;
 import json.JsonObject;
 import json.ReadJsonlFile;
 import lucene.Index;
+import me.tongfei.progressbar.ProgressBar;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
@@ -25,6 +26,7 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * ==========================================Experiment-4=========================================
@@ -47,6 +49,7 @@ public class Experiment4 {
     private Map<String, HashMap<String, HashMap<String, Integer>>> aspectEntityMap = new HashMap<>();
     private Map<String, HashMap<String, Integer>> contextEntityMap = new ConcurrentHashMap<>();
     private String relType;
+    private final boolean parallel;
 
     /**
      * Constructor.
@@ -69,6 +72,7 @@ public class Experiment4 {
                        String aspectEntityFile,
                        String runFile,
                        boolean useRelatedness,
+                       boolean parallel,
                        @NotNull String relType,
                        Analyzer analyzer,
                        Similarity similarity) {
@@ -76,8 +80,8 @@ public class Experiment4 {
         String jsonFilePath = mainDir + "/" + dataDir + "/"  + jsonFile;
         String aspectEntityFilePath = mainDir + "/" + dataDir + "/" + aspectEntityFile;
         String contextEntityFilePath = mainDir + "/" + dataDir + "/" + contextEntityFile;
-        String runFilePath;
-        Map<String, HashMap<String, Integer>> contextEntityMapCopy = new ConcurrentHashMap<>();
+        String runFilePath = mainDir + "/" + outputDir + "/" + runFile;
+        this.parallel = parallel;
 
         if (relType.equalsIgnoreCase("mw")) {
             System.out.println("Entity Similarity Measure: Milne-Witten");
@@ -111,12 +115,8 @@ public class Experiment4 {
                 e.printStackTrace();
             }
             System.out.println("[Done].");
-            contextEntityMapCopy = new ConcurrentHashMap<>(contextEntityMap);
-            runFile = runFile.substring(0,runFile.indexOf("."));
-            runFilePath = mainDir + "/" + outputDir + "/" + runFile + "-" + relType + ".run";
         } else {
             System.out.println("Obtaining distribution of co-occurring entities using: Frequency");
-            runFilePath = mainDir + "/" + outputDir + "/" + runFile;
         }
 
         System.out.print("Setting up index for use...");
@@ -139,20 +139,6 @@ public class Experiment4 {
 
         score(runFilePath, jsonObjectList, useRelatedness);
 
-
-        if (useRelatedness) {
-            if (!contextEntityMapCopy.equals(contextEntityMap)) {
-                System.out.println("Context Entity Map changed during program run.");
-                System.out.print("Saving new map to file....");
-                try {
-                    Utilities.writeMap(contextEntityMap, contextEntityFilePath);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                System.out.println("[Done].");
-            }
-        }
-
     }
 
     /**
@@ -165,11 +151,32 @@ public class Experiment4 {
                        @NotNull List<JSONObject> jsonObjectList,
                        boolean useRelatedness) {
 
-        // Do in parallel
-        jsonObjectList.parallelStream().forEach(jsonObject -> doTask(jsonObject, useRelatedness));
+        if (parallel) {
+            System.out.println("Using Parallel Streams.");
+            int parallelism = ForkJoinPool.commonPool().getParallelism();
+            int numOfCores = Runtime.getRuntime().availableProcessors();
+            System.out.println("Number of available processors = " + numOfCores);
+            System.out.println("Number of threads generated = " + parallelism);
 
-        // Do in serial
-        //jsonObjectList.forEach(jsonObject -> doTask(jsonObject, useRelatedness));
+            if (parallelism == numOfCores - 1) {
+                System.err.println("WARNING: USING ALL AVAILABLE PROCESSORS");
+                System.err.println("USE: \"-Djava.util.concurrent.ForkJoinPool.common.parallelism=N\" " +
+                        "to set the number of threads used");
+            }
+            // Do in parallel
+            jsonObjectList.parallelStream().forEach(jsonObject -> doTask(jsonObject, useRelatedness));
+        } else {
+            System.out.println("Using Sequential Streams.");
+
+            // Do in serial
+            ProgressBar pb = new ProgressBar("Progress", jsonObjectList.size());
+            for (JSONObject jsonObject : jsonObjectList) {
+                doTask(jsonObject, useRelatedness);
+                pb.step();
+            }
+            pb.close();
+        }
+
 
 
         System.out.print("Writing to run file...");
@@ -183,6 +190,7 @@ public class Experiment4 {
         String entityID = JsonObject.getEntityId(jsonObject);
         String entityMention = JsonObject.getMention(jsonObject);
         String entityName  = JsonObject.getEntityName(jsonObject);
+        String idContext = JsonObject.getIdContext(jsonObject);
         List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
 
         Map<String, Double> aspectScores = new HashMap<>();
@@ -193,10 +201,10 @@ public class Experiment4 {
         if (pseudoDocument != null) {
 
             // Get the probability distribution over the co-occurring entities
-            Map<String, Double> distribution = getDistribution(entityID, pseudoDocument, useRelatedness);
+            Map<String, Double> distribution = getDistribution(entityID, idContext, pseudoDocument, useRelatedness);
 
             // Now score the candidate aspects
-            aspectScores = scoreAspects(entityID, distribution, candidateAspects);
+            aspectScores = scoreAspects(idContext, distribution, candidateAspects);
         } else {
             System.err.println("ERROR: No PseudoDocument for entity: " + entityID);
             // If no pseudo-document found, each aspect gets a score of 0
@@ -218,7 +226,7 @@ public class Experiment4 {
      */
 
     @NotNull
-    private Map<String, Double> scoreAspects(String entityId,
+    private Map<String, Double> scoreAspects(String idContext,
                                              Map<String, Double> distribution,
                                              @NotNull List<Aspect> candidateAspects) {
 
@@ -229,7 +237,7 @@ public class Experiment4 {
         for (Aspect aspect : candidateAspects) {
 
             // Get all the (entity, id) in the aspect (provided with the data + WAT annotations)
-            Map<String, Integer> aspectEntity = aspectEntityMap.get(entityId).get(aspect.getId());
+            Map<String, Integer> aspectEntity = aspectEntityMap.get(idContext).get(aspect.getId());
 
             // Score the aspect
             double score = scoreAspect(distribution, new ArrayList<>(aspectEntity.keySet()));
@@ -289,11 +297,12 @@ public class Experiment4 {
 
     @NotNull
     private Map<String, Double> getDistribution(String entityID,
+                                                String idContext,
                                                 @NotNull PseudoDocument pseudoDocument,
                                                 boolean useRelatedness) {
 
         if (useRelatedness) {
-            return getRelatednessDistribution(entityID, pseudoDocument);
+            return getRelatednessDistribution(entityID, idContext, pseudoDocument);
         }
 
         return getFrequencyDistribution(pseudoDocument);
@@ -321,17 +330,19 @@ public class Experiment4 {
     }
 
     @NotNull
-    private Map<String, Double> getRelatednessDistribution(String entityID, @NotNull PseudoDocument pseudoDocument) {
+    private Map<String, Double> getRelatednessDistribution(String entityID, String idContext,
+                                                           @NotNull PseudoDocument pseudoDocument) {
         HashMap<String, Double> relMap = new HashMap<>();
 
         // Get the list of co-occurring entities
-        ArrayList<String> pseudoDocEntityList = pseudoDocument.getEntityList();
+        //ArrayList<String> pseudoDocEntityList = pseudoDocument.getEntityList();
+        Set<String> pseudoDocEntitySet = new HashSet<>(pseudoDocument.getEntityList());
 
         // For every co-occurring entity do
-        for (String e : pseudoDocEntityList) {
+        for (String e : pseudoDocEntitySet) {
 
             // Find the frequency of this entity in the pseudo-document and store it
-            relMap.put(e, getRelatedness(entityID, unprocess(e)));
+            relMap.put(e, getRelatedness(entityID, idContext, unprocess(e)));
         }
 
         return relMap;
@@ -359,38 +370,34 @@ public class Experiment4 {
      * @return Double Relatedness
      */
 
-    private double getRelatedness(@NotNull String targetEntityId, String contextEntityId) {
+    private double getRelatedness(@NotNull String targetEntityId, String targetIdContext, String contextEntityId) {
         HashMap<String, Integer> targetEntityMap;
 
-        if (contextEntityMap.containsKey(targetEntityId)) {
-            targetEntityMap = contextEntityMap.get(targetEntityId);
+        if (contextEntityMap.containsKey(targetIdContext)) {
+            targetEntityMap = contextEntityMap.get(targetIdContext);
         } else {
             targetEntityMap = new HashMap<>();
         }
 
         int id1, id2;
-        String s1, s2;
+        String s1 = targetEntityId.substring(targetEntityId.indexOf(":") + 1).replaceAll("%20", "_");
+        String s2 = contextEntityId.substring(contextEntityId.indexOf(":") + 1).replaceAll("%20", "_");
 
         if (targetEntityId.equalsIgnoreCase(contextEntityId)) {
             return 1.0d;
         }
 
-        if (targetEntityMap.containsKey(targetEntityId)) {
-            id1 = targetEntityMap.get(targetEntityId);
+        if (targetEntityMap.containsKey(s1)) {
+            id1 = targetEntityMap.get(s1);
         } else {
-            s1 = targetEntityId.substring(targetEntityId.indexOf(":") + 1).replaceAll("%20", "_");
             id1 = WATApi.TitleResolver.getId(s1);
-            targetEntityMap.put(targetEntityId, id1);
         }
 
-        if (targetEntityMap.containsKey(contextEntityId)) {
-            id2 = targetEntityMap.get(contextEntityId);
+        if (targetEntityMap.containsKey(s2)) {
+            id2 = targetEntityMap.get(s2);
         } else {
-            s2 = contextEntityId.substring(contextEntityId.indexOf(":") + 1).replaceAll("%20", "_");
             id2 = WATApi.TitleResolver.getId(s2);
-            targetEntityMap.put(contextEntityId, id2);
         }
-        contextEntityMap.put(targetEntityId, targetEntityMap);
 
         if (id1 < 0 || id2 < 0) {
             return 0.0d;
@@ -525,18 +532,18 @@ public class Experiment4 {
         String jsonFile = args[4];
         String contextEntityFile = args[5];
         String aspectEntityFile = args[6];
-        String runFile = args[7];
-        String rel = args[8];
+        String rel = args[7];
+        String p = args[8];
         String a = args[9];
         String s = args[10];
 
         Analyzer analyzer = null;
         Similarity similarity = null;
-        boolean useRelatedness = false;
-        String relType = "";
+        boolean useRelatedness = false, parallel = false;
+        String relType = "", runFile = "";
 
         switch (a) {
-            case "std" :
+            case "std":
                 System.out.println("Analyzer: Standard");
                 analyzer = new StandardAnalyzer();
                 break;
@@ -552,7 +559,7 @@ public class Experiment4 {
 
         switch (s) {
 
-            case "BM25" :
+            case "BM25":
             case "bm25":
                 similarity = new BM25Similarity();
                 System.out.println("Similarity: BM25");
@@ -597,12 +604,17 @@ public class Experiment4 {
             relType = sc.nextLine();
             useRelatedness = true;
         }
+
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
+        if (useRelatedness) {
+            runFile = "4b-ecn-entity-name-rel-dist-" + relType + ".run";
+        } else {
+            runFile = "4a-ecn-entity-name-freq-dist.run";
+        }
         new Experiment4(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
-                runFile, useRelatedness, relType, analyzer, similarity);
-
-
+                runFile, useRelatedness, parallel, relType, analyzer, similarity);
     }
-
-
 
 }

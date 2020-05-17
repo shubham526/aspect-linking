@@ -1,4 +1,4 @@
-package experiments;
+package extra;
 
 import api.WATApi;
 import help.PseudoDocument;
@@ -19,7 +19,6 @@ import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMDirichletSimilarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
-import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.json.simple.JSONObject;
 
@@ -29,20 +28,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinPool;
 
-/**
- * ===========================================Experiment-3======================================================
- * (1) Use entities from sentence, paragraph or section context.
- * (2) Find support passages for entities in (1).
- * (3) Score(Aspect | Entity) = Sum of entity scores for every entity in the aspect.
- * Use aspect_candidates as candidates for support passage.
- * This experiment uses the relatedness of co-occurring entities to find distribution over these entities..
- * ============================================================================================================
- *
- * @author Shubham Chatterjee
- * @version 03/25/2020
- */
-
-public class Experiment3 {
+public class RankRelatedEntitiesInContext {
     private final IndexSearcher searcher;
     private final Analyzer analyzer;
     private final ArrayList<String> runFileStrings = new ArrayList<>();
@@ -66,7 +52,7 @@ public class Experiment3 {
      * @param similarity Similarity Type of similarity to use for search.
      */
 
-    public Experiment3(String indexDir,
+    public RankRelatedEntitiesInContext(String indexDir,
                        String mainDir,
                        String dataDir,
                        String outputDir,
@@ -214,50 +200,33 @@ public class Experiment3 {
             }
         }
         getEntityScoresForAspect(aspectScoresForEntity, entityScoresForAspect);
-        finalScores = getFinalScoresOfAspect(entityScoresForAspect);
-        makeRunFileStrings(jsonObject, finalScores);
+        makeRunFileStrings(entityScoresForAspect);
         System.out.println("Done: " + mention);
 
     }
 
-    private void makeRunFileStrings(JSONObject jsonObject,
-                                    @NotNull Map<String, Double> scoreMap) {
-        String runFileString;
-        String idContext = JsonObject.getIdContext(jsonObject);
-        int rank = 1;
-        String info = "3-ecn-rel-dist-" + relType;
-        for (String idAspect : scoreMap.keySet()) {
-            runFileString = idContext + " " + "0" + " " + idAspect + " " +
-                    rank++ + " " + scoreMap.get(idAspect) + " " + info ;
-            runFileStrings.add(runFileString);
+    private void makeRunFileStrings(@NotNull Map<String, Map<String, Double>> rankings) {
+
+
+        String runFileString; // A candidate run file string
+        int rank; // Rank of the aspect
+        Map<String, Double> scoreMap; // Map of scores
+        String info = "rel";
+
+        for (String idAspect : rankings.keySet()) {
+            scoreMap = Utilities.sortByValueDescending(rankings.get(idAspect));
+            rank = 1;
+            for (String entity : scoreMap.keySet()) {
+                if (!entity.equals("")) {
+                    runFileString = idAspect + " " + "0" + " " + entity + " " + rank++ + " " + scoreMap.get(entity)
+                            + " " + info;
+                    if (!runFileStrings.contains(runFileString)) {
+                        runFileStrings.add(runFileString);
+                    }
+                }
+
+            }
         }
-    }
-
-    @NotNull
-    private Map<String, Double> getFinalScoresOfAspect(@NotNull Map<String, Map<String, Double>> entityScoresForAspect) {
-
-        List<String> aspectIdList = new ArrayList<>(entityScoresForAspect.keySet());
-        Map<String, Double> finalScores = new HashMap<>();
-
-        for (String aspectId : aspectIdList) {
-            Map<String, Double> entityScores = entityScoresForAspect.get(aspectId);
-            double score = sum(entityScores);
-            finalScores.put(aspectId, score);
-        }
-
-        return Utilities.sortByValueDescending(finalScores);
-    }
-
-    @Contract(pure = true)
-    private double sum(@NotNull Map<String, Double> entityScores) {
-
-        double sum = 0.0d;
-        for (String entity : entityScores.keySet()) {
-            double entityScore = entityScores.get(entity);
-            sum += entityScore;
-        }
-
-        return sum;
     }
 
     private void getEntityScoresForAspect(@NotNull Map<String, Map<String, Double>> aspectScoresForEntity,
@@ -629,10 +598,10 @@ public class Experiment3 {
         System.out.println("Enter you choice:");
         relType = sc.nextLine();
 
-        String runFile = "3-ecn-" + contextType + "-context-rel-dist-" + relType;
+        String runFile = contextType + "-context-using-relatedness.run";
 
 
-        new Experiment3(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
+        new RankRelatedEntitiesInContext(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
                 runFile,parallel, relType, analyzer, similarity);
 
     }

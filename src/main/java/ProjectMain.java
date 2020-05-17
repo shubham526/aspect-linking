@@ -1,5 +1,5 @@
+import extra.RankRelatedEntitiesInContext;
 import experiments.*;
-import random.GetEntities;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
@@ -8,6 +8,8 @@ import org.apache.lucene.search.similarities.LMDirichletSimilarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
 import org.jetbrains.annotations.NotNull;
+import random.GetEntities;
+import random.GetSWATEntities;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -257,10 +259,53 @@ public class ProjectMain {
         } else if (command.equalsIgnoreCase("--get-ent")) {
             getEnt(args);
 
+        } else if (command.equalsIgnoreCase("--rank-related-context")) {
+            rankRelatedEntitiesInContext(args);
+        }  else if (command.equalsIgnoreCase("--get-swat-ent")) {
+            getSwatEnt(args);
+
         } else {
             System.err.println("Wrong command! Try again!");
             System.exit(-1);
         }
+
+    }
+
+    private static void getSwatEnt(@NotNull String[] args) {
+        String mainDir = args[1];
+        String dataDir = args[2];
+        String outputDir = args[3];
+        String jsonFile = args[4];
+        String mode = args[5];
+        String p = args[6];
+
+        String sentContextEntityFile = "", paraContextEntityFile = "", secContextEntityFile = "", aspectEntityFile = "";
+
+        if (mode.equalsIgnoreCase("sal")) {
+            System.out.println("Getting salient entities");
+            sentContextEntityFile = "sal-sent-ent.ser";
+            paraContextEntityFile = "sal-para-ent.ser";
+            secContextEntityFile = "sal-sec-ent.ser";
+            aspectEntityFile = "sal-aspect-ent.ser";
+        } else if (mode.equalsIgnoreCase("all")) {
+            System.out.println("Getting all entities");
+            sentContextEntityFile = "all-sent-ent.ser";
+            paraContextEntityFile = "all-para-ent.ser";
+            secContextEntityFile = "all-sec-ent.ser";
+            aspectEntityFile = "all-aspect-ent.ser";
+        } else {
+            System.err.println("Wrong Choice for mode. Can be either: sal or all.");
+            System.exit(-1);
+        }
+
+        boolean parallel = false;
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
+
+
+        new GetSWATEntities(mainDir, dataDir, outputDir, jsonFile, sentContextEntityFile, paraContextEntityFile,
+                secContextEntityFile, aspectEntityFile, mode, parallel);
 
     }
 
@@ -272,34 +317,133 @@ public class ProjectMain {
         String aspectEntityFile = args[5];
         String contextType = args[6];
         String mode = args[7];
-        String p = args[8];
+        String s = args[8];
+        String p = args[9];
 
         boolean parallel = false;
         if (p.equalsIgnoreCase("true")) {
             parallel = true;
         }
+        boolean useSalientEntities = false;
+        if (s.equalsIgnoreCase("true")) {
+            useSalientEntities = true;
+        }
         String runFile = "salience-" +  contextType + "-context-" + mode + "-entities.run";
 
-        new Experiment1(mainDir, dataDir, outputDir, jsonFile, aspectEntityFile, runFile, contextType, mode, parallel);
+        new Experiment1(mainDir, dataDir, outputDir, jsonFile, aspectEntityFile, runFile, contextType, mode,
+                useSalientEntities, parallel);
     }
 
     private static void exp2(@NotNull String[] args) {
 
+            String indexDir = args[1];
+            String mainDir = args[2];
+            String dataDir = args[3];
+            String outputDir = args[4];
+            String jsonFile = args[5];
+            String contextType = args[6];
+            String contextEntityFile = args[7];
+            String aspectEntityFile = args[8];
+            String rel = args[9];
+            String p = args[10];
+            String a = args[11];
+            String s = args[12];
+
+            Analyzer analyzer = null;
+            Similarity similarity = null;
+            boolean useRelatedness = false;
+            String relType = "", runFile = "";
+
+            switch (a) {
+                case "std":
+                    System.out.println("Analyzer: Standard");
+                    analyzer = new StandardAnalyzer();
+                    break;
+                case "eng":
+                    System.out.println("Analyzer: English");
+                    analyzer = new EnglishAnalyzer();
+
+                    break;
+                default:
+                    System.out.println("Wrong choice of analyzer! Program ends.");
+                    System.exit(1);
+            }
+
+            switch (s) {
+
+                case "BM25":
+                case "bm25":
+                    similarity = new BM25Similarity();
+                    System.out.println("Similarity: BM25");
+                    break;
+
+                case "LMJM":
+                case "lmjm":
+                    System.out.println("Similarity: LMJM");
+                    float lambda;
+                    try {
+                        lambda = Float.parseFloat(args[13]);
+                        System.out.println("Lambda = " + lambda);
+                        similarity = new LMJelinekMercerSimilarity(lambda);
+                    } catch (IndexOutOfBoundsException e) {
+                        System.out.println("Missing lambda value for similarity LM-JM");
+                        System.exit(1);
+                    }
+                    break;
+
+                case "LMDS":
+                case "lmds":
+                    System.out.println("Similarity: LMDS");
+                    similarity = new LMDirichletSimilarity();
+                    break;
+
+                default:
+                    System.out.println("Wrong choice of similarity! Program end.");
+                    System.exit(1);
+            }
+
+            if (rel.equalsIgnoreCase("true")) {
+                Scanner sc = new Scanner(System.in);
+                System.out.println("Enter the entity relation type to use. Your choices are:");
+                System.out.println("mw (Milne-Witten)");
+                System.out.println("jaccard (Jaccard measure of pages outlinks)");
+                System.out.println("lm (language model)");
+                System.out.println("w2v (Word2Vect)");
+                System.out.println("cp (Conditional Probability)");
+                System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
+                System.out.println("pmi (Pointwise Mutual Information)");
+                System.out.println("Enter you choice:");
+                relType = sc.nextLine();
+                useRelatedness = true;
+            }
+            if (useRelatedness) {
+                runFile = "2a-ecn-" + contextType + "-context-using-relatedness-" + relType + ".run";
+            } else {
+                runFile = "2b-ecn-" + contextType + "-context-not-using-relatedness.run";
+            }
+            boolean parallel = false;
+            if (p.equalsIgnoreCase("true")) {
+                parallel = true;
+            }
+            new Experiment2(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
+                    runFile, useRelatedness, parallel, relType, analyzer, similarity);
+        }
+
+    private static void exp3(@NotNull String[] args) {
         String indexDir = args[1];
         String mainDir = args[2];
         String dataDir = args[3];
         String outputDir = args[4];
         String jsonFile = args[5];
-        String contextEntityFile = args[6];
-        String aspectEntityFile = args[7];
-        String runFile = args[8];
-        String rel = args[9];
+        String contextType = args[6];
+        String contextEntityFile = args[7];
+        String aspectEntityFile = args[8];
+        String p = args[9];
         String a = args[10];
         String s = args[11];
 
         Analyzer analyzer = null;
         Similarity similarity = null;
-        boolean useRelatedness = false;
         String relType = "";
 
         switch (a) {
@@ -350,87 +494,12 @@ public class ProjectMain {
                 System.exit(1);
         }
 
-        if (rel.equalsIgnoreCase("true")) {
-            Scanner sc = new Scanner(System.in);
-            System.out.println("Enter the entity relation type to use. Your choices are:");
-            System.out.println("mw (Milne-Witten)");
-            System.out.println("jaccard (Jaccard measure of pages outlinks)");
-            System.out.println("lm (language model)");
-            System.out.println("w2v (Word2Vect)");
-            System.out.println("cp (Conditional Probability)");
-            System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
-            System.out.println("pmi (Pointwise Mutual Information)");
-            System.out.println("Enter you choice:");
-            relType = sc.nextLine();
-            useRelatedness = true;
-        }
-        new Experiment2(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
-                runFile, useRelatedness, relType, analyzer, similarity);
 
-    }
-
-    private static void exp3(@NotNull String[] args) {
-        String indexDir = args[1];
-        String mainDir = args[2];
-        String dataDir = args[3];
-        String outputDir = args[4];
-        String jsonFile = args[5];
-        String contextEntityFile = args[6];
-        String aspectEntityFile = args[7];
-        String runFile = args[8];
-        String a = args[9];
-        String s = args[10];
-
-        Analyzer analyzer = null;
-        Similarity similarity = null;
-
-        switch (a) {
-            case "std" :
-                System.out.println("Analyzer: Standard");
-                analyzer = new StandardAnalyzer();
-                break;
-            case "eng":
-                System.out.println("Analyzer: English");
-                analyzer = new EnglishAnalyzer();
-
-                break;
-            default:
-                System.out.println("Wrong choice of analyzer! Program ends.");
-                System.exit(1);
+        boolean parallel = false;
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
         }
 
-        switch (s) {
-
-            case "BM25" :
-            case "bm25":
-                similarity = new BM25Similarity();
-                System.out.println("Similarity: BM25");
-                break;
-
-            case "LMJM":
-            case "lmjm":
-                System.out.println("Similarity: LMJM");
-                float lambda;
-                try {
-                    lambda = Float.parseFloat(args[11]);
-                    System.out.println("Lambda = " + lambda);
-                    similarity = new LMJelinekMercerSimilarity(lambda);
-                } catch (IndexOutOfBoundsException e) {
-                    System.out.println("Missing lambda value for similarity LM-JM");
-                    System.exit(1);
-                }
-                break;
-
-            case "LMDS":
-            case "lmds":
-                System.out.println("Similarity: LMDS");
-                similarity = new LMDirichletSimilarity();
-                break;
-
-            default:
-                System.out.println("Wrong choice of similarity! Program end.");
-                System.exit(1);
-        }
         Scanner sc = new Scanner(System.in);
         System.out.println("Enter the entity relation type to use. Your choices are:");
         System.out.println("mw (Milne-Witten)");
@@ -441,11 +510,13 @@ public class ProjectMain {
         System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
         System.out.println("pmi (Pointwise Mutual Information)");
         System.out.println("Enter you choice:");
-        String relType = sc.nextLine();
+        relType = sc.nextLine();
+
+        String runFile = "3-ecn-" + contextType + "-context-rel-dist-" + relType;
 
 
         new Experiment3(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
-                runFile, relType, analyzer, similarity);
+                runFile,parallel, relType, analyzer, similarity);
 
     }
 
@@ -457,18 +528,18 @@ public class ProjectMain {
         String jsonFile = args[5];
         String contextEntityFile = args[6];
         String aspectEntityFile = args[7];
-        String runFile = args[8];
-        String rel = args[9];
+        String rel = args[8];
+        String p = args[9];
         String a = args[10];
         String s = args[11];
 
         Analyzer analyzer = null;
         Similarity similarity = null;
-        boolean useRelatedness = false;
-        String relType = "";
+        boolean useRelatedness = false, parallel = false;
+        String relType = "", runFile = "";
 
         switch (a) {
-            case "std" :
+            case "std":
                 System.out.println("Analyzer: Standard");
                 analyzer = new StandardAnalyzer();
                 break;
@@ -484,7 +555,7 @@ public class ProjectMain {
 
         switch (s) {
 
-            case "BM25" :
+            case "BM25":
             case "bm25":
                 similarity = new BM25Similarity();
                 System.out.println("Similarity: BM25");
@@ -529,9 +600,17 @@ public class ProjectMain {
             relType = sc.nextLine();
             useRelatedness = true;
         }
-        new Experiment4(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
-                runFile, useRelatedness, relType, analyzer, similarity);
 
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
+        if (useRelatedness) {
+            runFile = "4b-ecn-entity-name-rel-dist-" + relType + ".run";
+        } else {
+            runFile = "4a-ecn-entity-name-freq-dist.run";
+        }
+        new Experiment4(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
+                runFile, useRelatedness, parallel, relType, analyzer, similarity);
     }
 
     private static void exp5(@NotNull String[] args) {
@@ -540,207 +619,18 @@ public class ProjectMain {
 
         String pageIndexDir = args[1];
         String mainDir = args[2];
-        String outputDir = args[3];
-        String dataDir = args[4];
-        String idFile = args[5];
-        String jsonFile = args[6];
-        String aspectEntityFile = args[7];
-        String outFile = args[8];
-        String a = args[9];
-        String sim = args[10];
-
-
-        switch (a) {
-            case "std" :
-                System.out.println("Analyzer: Standard");
-                analyzer = new StandardAnalyzer();
-                break;
-            case "eng":
-                System.out.println("Analyzer: English");
-                analyzer = new EnglishAnalyzer();
-
-                break;
-            default:
-                System.out.println("Wrong choice of analyzer! Exiting.");
-                System.exit(1);
-        }
-        switch (sim) {
-            case "BM25" :
-            case "bm25":
-                similarity = new BM25Similarity();
-                System.out.println("Similarity: BM25");
-                break;
-            case "LMJM":
-            case "lmjm":
-                System.out.println("Similarity: LMJM");
-                float lambda;
-                try {
-                    lambda = Float.parseFloat(args[11]);
-                    System.out.println("Lambda = " + lambda);
-                    similarity = new LMJelinekMercerSimilarity(lambda);
-                } catch (IndexOutOfBoundsException e) {
-                    System.out.println("Missing lambda value for similarity LM-JM");
-                    System.exit(1);
-                }
-                break;
-            case "LMDS":
-            case "lmds":
-                System.out.println("Similarity: LMDS");
-                similarity = new LMDirichletSimilarity();
-                break;
-
-            default:
-                System.out.println("Wrong choice of similarity! Exiting.");
-                System.exit(1);
-        }
-        Scanner sc = new Scanner(System.in);
-        System.out.println("Enter the entity relation type to use. Your choices are:");
-        System.out.println("mw (Milne-Witten)");
-        System.out.println("jaccard (Jaccard measure of pages outlinks)");
-        System.out.println("lm (language model)");
-        System.out.println("w2v (Word2Vect)");
-        System.out.println("cp (Conditional Probability)");
-        System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
-        System.out.println("pmi (Pointwise Mutual Information)");
-        System.out.println("Enter you choice:");
-        String relType = sc.nextLine();
-
-        new Experiment5(pageIndexDir, mainDir, outputDir, dataDir, idFile, jsonFile, aspectEntityFile,
-                outFile, relType, analyzer, similarity);
-    }
-    private static void exp6(@NotNull String[] args) {
-        Similarity similarity = null;
-        Analyzer analyzer = null;
-        boolean omit;
-        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-        StringBuilder outFile = new StringBuilder();
-        String relType = "";
-
-        outFile.append("qe-rel-ent-page")
-                .append("-");
-
-        String pageIndexDir = args[1];
-        String mainDir = args[2];
-        String dataDir = args[3];
-        String outputDir = args[4];
-        String idFile = args[5];
-        String jsonFile = args[6];
-        int takeKEntities = Integer.parseInt(args[7]);
-        String o = args[8];
-        omit = o.equalsIgnoreCase("y") || o.equalsIgnoreCase("yes");
-        String a = args[9];
-        String sim = args[10];
-
-        System.out.printf("Using %d entities for query expansion\n", takeKEntities);
-
-
-        switch (a) {
-            case "std" :
-                System.out.println("Analyzer: Standard");
-                analyzer = new StandardAnalyzer();
-                break;
-            case "eng":
-                System.out.println("Analyzer: English");
-                analyzer = new EnglishAnalyzer();
-
-                break;
-            default:
-                System.out.println("Wrong choice of analyzer! Exiting.");
-                System.exit(1);
-        }
-        switch (sim) {
-            case "BM25" :
-            case "bm25":
-                similarity = new BM25Similarity();
-                System.out.println("Similarity: BM25");
-                outFile.append("bm25");
-                break;
-            case "LMJM":
-            case "lmjm":
-                System.out.println("Similarity: LMJM");
-                float lambda;
-                try {
-                    lambda = Float.parseFloat(args[11]);
-                    System.out.println("Lambda = " + lambda);
-                    similarity = new LMJelinekMercerSimilarity(lambda);
-                    outFile.append("lmjm");
-                } catch (IndexOutOfBoundsException e) {
-                    System.out.println("Missing lambda value for similarity LM-JM");
-                    System.exit(1);
-                }
-                break;
-            case "LMDS":
-            case "lmds":
-                System.out.println("Similarity: LMDS");
-                similarity = new LMDirichletSimilarity();
-                outFile.append("lmds");
-                break;
-
-            default:
-                System.out.println("Wrong choice of similarity! Exiting.");
-                System.exit(1);
-        }
-        outFile.append("-");
-
-        if (omit) {
-            System.out.println("Using RM1");
-            outFile.append("rm1");
-        } else {
-            System.out.println("Using RM3");
-            outFile.append("rm3");
-        }
-        outFile.append(".run");
-        System.out.println("Output File: " + outFile.toString());
-
-        System.out.println("Enter the entity relation type to use. Your choices are:");
-        System.out.println("mw (Milne-Witten)");
-        System.out.println("jaccard (Jaccard measure of pages outlinks)");
-        System.out.println("lm (language model)");
-        System.out.println("w2v (Word2Vect)");
-        System.out.println("cp (Conditional Probability)");
-        System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
-        System.out.println("pmi (Pointwise Mutual Information)");
-        System.out.println("Enter you choice:");
-        try {
-            relType = br.readLine();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        new Experiment6(pageIndexDir, mainDir, dataDir, outputDir, idFile, jsonFile,
-                outFile.toString(), relType, takeKEntities, omit, analyzer, similarity);
-
-    }
-    private static void exp7(@NotNull String[] args) {
-        Similarity similarity = null;
-        Analyzer analyzer = null;
-        boolean omit;
-        String s1 = null, s2, s3 = "freq";
-        boolean useRelatedness = false;
-        String relType = "";
-
-        String indexDir = args[1];
-        String mainDir = args[2];
         String dataDir = args[3];
         String outputDir = args[4];
         String jsonFile = args[5];
         String contextEntityFile = args[6];
-        String rel = args[7];
-        int takeKEntities = Integer.parseInt(args[8]);
-        String o = args[9];
-        omit = o.equalsIgnoreCase("y") || o.equalsIgnoreCase("yes");
+        String aspectEntityFile = args[7];
+        String rel = args[8];
+        String p = args[9];
         String a = args[10];
         String sim = args[11];
 
-        System.out.printf("Using %d entities for query expansion\n", takeKEntities);
-
-        if (omit) {
-            System.out.println("Using RM1");
-            s2 = "rm1";
-        } else {
-            System.out.println("Using RM3");
-            s2 = "rm3";
-        }
+        String relType = "", runFile = "", s1 = "", s2 = "freq";
+        boolean parallel = false, useRel = false;
 
 
         switch (a) {
@@ -801,25 +691,341 @@ public class ProjectMain {
             System.out.println("pmi (Pointwise Mutual Information)");
             System.out.println("Enter you choice:");
             relType = sc.nextLine();
+            s2 = "rel";
+            useRel = true;
+        }
+
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
+
+        runFile = "5-" + s2 + "-dist-wiki-page-" + s1 + ".run";
+
+        new Experiment5(pageIndexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
+                runFile, useRel,parallel, relType, analyzer, similarity);
+
+
+    }
+    private static void exp6(@NotNull String[] args) {
+        Similarity similarity = null;
+        Analyzer analyzer = null;
+        boolean omit;
+        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+        StringBuilder outFile = new StringBuilder();
+        String relType = "";
+        boolean parallel = false;
+
+        outFile.append("qe-rel-ent-page").append("-");
+
+        String pageIndexDir = args[1];
+        String mainDir = args[2];
+        String dataDir = args[3];
+        String outputDir = args[4];
+        String jsonFile = args[5];
+        String contextEntityFile = args[6];
+        String p = args[7];
+        int takeKEntities = Integer.parseInt(args[8]);
+        String o = args[9];
+        omit = o.equalsIgnoreCase("y") || o.equalsIgnoreCase("yes");
+        String a = args[10];
+        String sim = args[11];
+
+        System.out.printf("Using %d entities for query expansion\n", takeKEntities);
+
+
+        switch (a) {
+            case "std" :
+                System.out.println("Analyzer: Standard");
+                analyzer = new StandardAnalyzer();
+                break;
+            case "eng":
+                System.out.println("Analyzer: English");
+                analyzer = new EnglishAnalyzer();
+
+                break;
+            default:
+                System.out.println("Wrong choice of analyzer! Exiting.");
+                System.exit(1);
+        }
+        switch (sim) {
+            case "BM25" :
+            case "bm25":
+                similarity = new BM25Similarity();
+                System.out.println("Similarity: BM25");
+                outFile.append("bm25");
+                break;
+            case "LMJM":
+            case "lmjm":
+                System.out.println("Similarity: LMJM");
+                float lambda;
+                try {
+                    lambda = Float.parseFloat(args[12]);
+                    System.out.println("Lambda = " + lambda);
+                    similarity = new LMJelinekMercerSimilarity(lambda);
+                    outFile.append("lmjm");
+                } catch (IndexOutOfBoundsException e) {
+                    System.out.println("Missing lambda value for similarity LM-JM");
+                    System.exit(1);
+                }
+                break;
+            case "LMDS":
+            case "lmds":
+                System.out.println("Similarity: LMDS");
+                similarity = new LMDirichletSimilarity();
+                outFile.append("lmds");
+                break;
+
+            default:
+                System.out.println("Wrong choice of similarity! Exiting.");
+                System.exit(1);
+        }
+        outFile.append("-");
+
+        if (omit) {
+            System.out.println("Using RM1");
+            outFile.append("rm1");
+        } else {
+            System.out.println("Using RM3");
+            outFile.append("rm3");
+        }
+        outFile.append(".run");
+        System.out.println("Output File: " + outFile.toString());
+
+        System.out.println("Enter the entity relation type to use. Your choices are:");
+        System.out.println("mw (Milne-Witten)");
+        System.out.println("jaccard (Jaccard measure of pages outlinks)");
+        System.out.println("lm (language model)");
+        System.out.println("w2v (Word2Vect)");
+        System.out.println("cp (Conditional Probability)");
+        System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
+        System.out.println("pmi (Pointwise Mutual Information)");
+        System.out.println("Enter you choice:");
+        try {
+            relType = br.readLine();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
+
+        new Experiment6(pageIndexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile,
+                outFile.toString(), parallel, relType, takeKEntities, omit, analyzer, similarity);
+
+    }
+    private static void exp7(@NotNull String[] args) {
+        Similarity similarity = null;
+        Analyzer analyzer = null;
+        boolean omit;
+        String s1 = null, s2, s3 = "freq";
+        boolean useRelatedness = false;
+        String relType = "";
+        boolean parallel = false;
+
+        String indexDir = args[1];
+        String mainDir = args[2];
+        String dataDir = args[3];
+        String outputDir = args[4];
+        String jsonFile = args[5];
+        String contextEntityFile = args[6];
+        String rel = args[7];
+        String p = args[8];
+        int takeKEntities = Integer.parseInt(args[9]);
+        String o = args[10];
+        omit = o.equalsIgnoreCase("y") || o.equalsIgnoreCase("yes");
+        String a = args[11];
+        String sim = args[12];
+
+        System.out.printf("Using %d entities for query expansion\n", takeKEntities);
+
+        if (omit) {
+            System.out.println("Using RM1");
+            s2 = "rm1";
+        } else {
+            System.out.println("Using RM3");
+            s2 = "rm3";
+        }
+
+
+        switch (a) {
+            case "std" :
+                System.out.println("Analyzer: Standard");
+                analyzer = new StandardAnalyzer();
+                break;
+            case "eng":
+                System.out.println("Analyzer: English");
+                analyzer = new EnglishAnalyzer();
+
+                break;
+            default:
+                System.out.println("Wrong choice of analyzer! Exiting.");
+                System.exit(1);
+        }
+        switch (sim) {
+            case "BM25" :
+            case "bm25":
+                similarity = new BM25Similarity();
+                System.out.println("Similarity: BM25");
+                s1 = "bm25";
+                break;
+            case "LMJM":
+            case "lmjm":
+                System.out.println("Similarity: LMJM");
+                float lambda;
+                try {
+                    lambda = Float.parseFloat(args[13]);
+                    System.out.println("Lambda = " + lambda);
+                    similarity = new LMJelinekMercerSimilarity(lambda);
+                    s1 = "lmjm";
+                } catch (IndexOutOfBoundsException e) {
+                    System.out.println("Missing lambda value for similarity LM-JM");
+                    System.exit(1);
+                }
+                break;
+            case "LMDS":
+            case "lmds":
+                System.out.println("Similarity: LMDS");
+                similarity = new LMDirichletSimilarity();
+                s1 = "lmds";
+                break;
+
+            default:
+                System.out.println("Wrong choice of similarity! Exiting.");
+                System.exit(1);
+        }
+        if (rel.equalsIgnoreCase("true")) {
+            Scanner sc = new Scanner(System.in);
+            System.out.println("Enter the entity relation type to use. Your choices are:");
+            System.out.println("mw (Milne-Witten)");
+            System.out.println("jaccard (Jaccard measure of pages outlinks)");
+            System.out.println("lm (language model)");
+            System.out.println("w2v (Word2Vect)");
+            System.out.println("cp (Conditional Probability)");
+            System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
+            System.out.println("pmi (Pointwise Mutual Information)");
+            System.out.println("Enter you choice:");
+            relType = sc.nextLine();
             s3 = "rel";
             useRelatedness = true;
+        }
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
         }
         String outFile = "qee" + "-" + s1 + "-" + s2 + "-" + s3 + ".run";
 
         new Experiment7(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile,
-                outFile, useRelatedness, relType, takeKEntities, omit, analyzer, similarity);
+                outFile, useRelatedness, parallel, relType, takeKEntities, omit, analyzer, similarity);
+
+    }
+    private static void rankRelatedEntitiesInContext(@NotNull String[] args) {
+        String indexDir = args[1];
+        String mainDir = args[2];
+        String dataDir = args[3];
+        String outputDir = args[4];
+        String jsonFile = args[5];
+        String contextType = args[6];
+        String contextEntityFile = args[7];
+        String aspectEntityFile = args[8];
+        String p = args[9];
+        String a = args[10];
+        String s = args[11];
+
+        Analyzer analyzer = null;
+        Similarity similarity = null;
+        String relType = "";
+
+        switch (a) {
+            case "std" :
+                System.out.println("Analyzer: Standard");
+                analyzer = new StandardAnalyzer();
+                break;
+            case "eng":
+                System.out.println("Analyzer: English");
+                analyzer = new EnglishAnalyzer();
+
+                break;
+            default:
+                System.out.println("Wrong choice of analyzer! Program ends.");
+                System.exit(1);
+        }
+
+        switch (s) {
+
+            case "BM25" :
+            case "bm25":
+                similarity = new BM25Similarity();
+                System.out.println("Similarity: BM25");
+                break;
+
+            case "LMJM":
+            case "lmjm":
+                System.out.println("Similarity: LMJM");
+                float lambda;
+                try {
+                    lambda = Float.parseFloat(args[12]);
+                    System.out.println("Lambda = " + lambda);
+                    similarity = new LMJelinekMercerSimilarity(lambda);
+                } catch (IndexOutOfBoundsException e) {
+                    System.out.println("Missing lambda value for similarity LM-JM");
+                    System.exit(1);
+                }
+                break;
+
+            case "LMDS":
+            case "lmds":
+                System.out.println("Similarity: LMDS");
+                similarity = new LMDirichletSimilarity();
+                break;
+
+            default:
+                System.out.println("Wrong choice of similarity! Program end.");
+                System.exit(1);
+        }
+
+
+        boolean parallel = false;
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
+
+        Scanner sc = new Scanner(System.in);
+        System.out.println("Enter the entity relation type to use. Your choices are:");
+        System.out.println("mw (Milne-Witten)");
+        System.out.println("jaccard (Jaccard measure of pages outlinks)");
+        System.out.println("lm (language model)");
+        System.out.println("w2v (Word2Vect)");
+        System.out.println("cp (Conditional Probability)");
+        System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
+        System.out.println("pmi (Pointwise Mutual Information)");
+        System.out.println("Enter you choice:");
+        relType = sc.nextLine();
+
+        String runFile = contextType + "-context-using-relatedness.run";
+
+
+        new RankRelatedEntitiesInContext(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
+                runFile,parallel, relType, analyzer, similarity);
+
     }
     private static void getEnt(@NotNull String[] args) {
         String mainDir = args[1];
         String dataDir = args[2];
         String outputDir = args[3];
         String jsonFile = args[4];
-        String paraContextEntityFile = args[5];
-        String secContextEntityFile = args[6];
+        String sentContextEntityFile = args[5];
+        String paraContextEntityFile = args[6];
+        String secContextEntityFile = args[7];
+        String aspectEntityFile = args[8];
+        String p = args[9];
+
+        boolean parallel = false;
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
 
 
-        new GetEntities(mainDir, dataDir, outputDir, jsonFile, paraContextEntityFile,
-                secContextEntityFile);
+        new GetEntities(mainDir, dataDir, outputDir, jsonFile, sentContextEntityFile, paraContextEntityFile,
+                secContextEntityFile, aspectEntityFile, parallel);
     }
     private static void options() {
         System.out.println("The following options are available: exp1, exp2, exp3, exp4, exp5, exp6");

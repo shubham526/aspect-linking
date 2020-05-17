@@ -1,13 +1,11 @@
-package experiments;
+package extra;
 
 import api.WATApi;
 import help.PseudoDocument;
 import help.Utilities;
-import json.Aspect;
 import json.JsonObject;
 import json.ReadJsonlFile;
 import lucene.Index;
-import me.tongfei.progressbar.ProgressBar;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
@@ -19,71 +17,43 @@ import org.apache.lucene.search.similarities.BM25Similarity;
 import org.apache.lucene.search.similarities.LMDirichletSimilarity;
 import org.apache.lucene.search.similarities.LMJelinekMercerSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
-import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 import org.json.simple.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.StringReader;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ForkJoinPool;
 
-/**
- * ===========================================Experiment-3======================================================
- * (1) Use entities from sentence, paragraph or section context.
- * (2) Find support passages for entities in (1).
- * (3) Score(Aspect | Entity) = Sum of entity scores for every entity in the aspect.
- * Use aspect_candidates as candidates for support passage.
- * This experiment uses the relatedness of co-occurring entities to find distribution over these entities..
- * ============================================================================================================
- *
- * @author Shubham Chatterjee
- * @version 03/25/2020
- */
-
-public class Experiment3 {
+public class RelatednessAnalysis {
     private final IndexSearcher searcher;
     private final Analyzer analyzer;
-    private final ArrayList<String> runFileStrings = new ArrayList<>();
     private Map<String, Map<String, Integer>> contextEntityMap = new HashMap<>();
-    private Map<String, HashMap<String, HashMap<String, Integer>>> aspectEntityMap = new ConcurrentHashMap<>();
     private String relType;
-    private final boolean parallel;
-
 
 
     /**
      * Constructor.
      * @param indexDir String Path to the Lucene index.
      * @param dataDir String Path to the data directory.
-     * @param outputDir String Path to the output directory.
      * @param jsonFile String Name of the JSON-L file.
      * @param contextEntityFile String Name of the serialized file containing context entities.
-     * @param aspectEntityFile String Name of the serialized file containing aspect entities.
-     * @param runFile String Name of the run file.
      * @param analyzer Analyzer Type of Lucene analyzer.
      * @param similarity Similarity Type of similarity to use for search.
      */
 
-    public Experiment3(String indexDir,
-                       String mainDir,
-                       String dataDir,
-                       String outputDir,
-                       String jsonFile,
-                       String contextEntityFile,
-                       String aspectEntityFile,
-                       String runFile,
-                       boolean parallel,
-                       @NotNull String relType,
-                       Analyzer analyzer,
-                       Similarity similarity) {
+    public RelatednessAnalysis(String indexDir,
+                               String mainDir,
+                               String dataDir,
+                               String jsonFile,
+                               String contextEntityFile,
+                               @NotNull String relType,
+                               Analyzer analyzer,
+                               Similarity similarity) {
 
         String jsonFilePath = mainDir + "/" + dataDir + "/"  + jsonFile;
         String contextEntityFilePath = mainDir + "/" + dataDir + "/" + contextEntityFile;
-        String aspectEntityFilePath = mainDir + "/" + dataDir + "/" + aspectEntityFile;
-        String runFilePath = mainDir + "/" + outputDir + "/" + runFile;
-        this.parallel = parallel;
 
         if (relType.equalsIgnoreCase("mw")) {
             System.out.println("Entity Similarity Measure: Milne-Witten");
@@ -127,15 +97,7 @@ public class Experiment3 {
         }
         System.out.println("[Done].");
 
-        System.out.print("Reading the aspect entity file...");
-        try {
-            aspectEntityMap = Utilities.readMap(aspectEntityFilePath);
-        } catch (IOException | ClassNotFoundException e) {
-            e.printStackTrace();
-        }
-        System.out.println("[Done].");
-
-        score(runFilePath, jsonObjectList);
+        score(jsonObjectList);
 
     }
 
@@ -143,52 +105,20 @@ public class Experiment3 {
 
     /**
      * Method to score.
-     * @param runFilePath String
      * @param jsonObjectList List
      */
 
-    private void score(String runFilePath,
-                       @NotNull List<JSONObject> jsonObjectList) {
+    private void score(@NotNull List<JSONObject> jsonObjectList) {
+        for (int i = 0; i < 10; i++) {
+            JSONObject jsonObject = jsonObjectList.get(i);
+            doTask(jsonObject);
 
-
-        if (parallel) {
-            System.out.println("Using Parallel Streams.");
-            int parallelism = ForkJoinPool.commonPool().getParallelism();
-            int numOfCores = Runtime.getRuntime().availableProcessors();
-            System.out.println("Number of available processors = " + numOfCores);
-            System.out.println("Number of threads generated = " + parallelism);
-
-            if (parallelism == numOfCores - 1) {
-                System.err.println("WARNING: USING ALL AVAILABLE PROCESSORS");
-                System.err.println("USE: \"-Djava.util.concurrent.ForkJoinPool.common.parallelism=N\" " +
-                        "to set the number of threads used");
-            }
-            // Do in parallel
-            jsonObjectList.parallelStream().forEach(this::doTask);
-        } else {
-            System.out.println("Using Sequential Streams.");
-
-            // Do in serial
-            ProgressBar pb = new ProgressBar("Progress", jsonObjectList.size());
-            for (JSONObject jsonObject : jsonObjectList) {
-                doTask(jsonObject);
-                pb.step();
-            }
-            pb.close();
         }
-
-
-        System.out.print("Writing to run file...");
-        Utilities.writeFile(runFileStrings, runFilePath);
-        System.out.println("[Done].");
-
     }
 
     private void doTask(JSONObject jsonObject) {
+        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
 
-        Map<String, Map<String, Double>> aspectScoresForEntity = new HashMap<>();
-        Map<String, Map<String, Double>> entityScoresForAspect = new HashMap<>();
-        Map<String, Double> finalScores;
 
         String mention = JsonObject.getMention(jsonObject);
         String IdContext = JsonObject.getIdContext(jsonObject);
@@ -198,179 +128,35 @@ public class Experiment3 {
         Map<String, Integer> entityMap = contextEntityMap.get(entityID);
         List<String> contextEntityList = new ArrayList<>(entityMap.keySet());
 
-        // Get the candidate aspects
-        List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
-
         // For every entity in the context do
-        for (String entity : contextEntityList) {
+        for (int i = 0; i < 10; i++) {
+            String entity = contextEntityList.get(i);
+            System.out.println("Entity: " + entity);
+            System.out.println("==============================================");
 
-            // If the entity is not already present in the score map
-            if (!aspectScoresForEntity.containsKey(entity)) {
-                // Score the candidate aspects for the entity
-                Map<String, Double> aspectScores = scoreAspects(entity, entityID, IdContext, candidateAspects);
+            PseudoDocument pseudoDocument = createPseudoDocument(entity);
 
-                // Store the aspect scores for the entity
-                aspectScoresForEntity.put(entity,aspectScores);
+            if (pseudoDocument != null) {
+
+                // Get the probability distribution over the co-occurring entities
+                Map<String, Double> distribution = Utilities.sortByValueDescending(
+                        getDistribution(entityID, IdContext, pseudoDocument));
+                for (String relEnt : distribution.keySet()) {
+                    System.out.println("Entity: " + relEnt + " " + "Relatedness: " + distribution.get(relEnt));
+
+                }
+            }
+            System.out.println("==============================================");
+            System.out.println();
+            try {
+                br.readLine();
+            } catch (IOException e) {
+                e.printStackTrace();
             }
         }
-        getEntityScoresForAspect(aspectScoresForEntity, entityScoresForAspect);
-        finalScores = getFinalScoresOfAspect(entityScoresForAspect);
-        makeRunFileStrings(jsonObject, finalScores);
         System.out.println("Done: " + mention);
 
     }
-
-    private void makeRunFileStrings(JSONObject jsonObject,
-                                    @NotNull Map<String, Double> scoreMap) {
-        String runFileString;
-        String idContext = JsonObject.getIdContext(jsonObject);
-        int rank = 1;
-        String info = "3-ecn-rel-dist-" + relType;
-        for (String idAspect : scoreMap.keySet()) {
-            runFileString = idContext + " " + "0" + " " + idAspect + " " +
-                    rank++ + " " + scoreMap.get(idAspect) + " " + info ;
-            runFileStrings.add(runFileString);
-        }
-    }
-
-    @NotNull
-    private Map<String, Double> getFinalScoresOfAspect(@NotNull Map<String, Map<String, Double>> entityScoresForAspect) {
-
-        List<String> aspectIdList = new ArrayList<>(entityScoresForAspect.keySet());
-        Map<String, Double> finalScores = new HashMap<>();
-
-        for (String aspectId : aspectIdList) {
-            Map<String, Double> entityScores = entityScoresForAspect.get(aspectId);
-            double score = sum(entityScores);
-            finalScores.put(aspectId, score);
-        }
-
-        return Utilities.sortByValueDescending(finalScores);
-    }
-
-    @Contract(pure = true)
-    private double sum(@NotNull Map<String, Double> entityScores) {
-
-        double sum = 0.0d;
-        for (String entity : entityScores.keySet()) {
-            double entityScore = entityScores.get(entity);
-            sum += entityScore;
-        }
-
-        return sum;
-    }
-
-    private void getEntityScoresForAspect(@NotNull Map<String, Map<String, Double>> aspectScoresForEntity,
-                                          Map<String, Map<String, Double>> entityScoresForAspect) {
-
-        List<String> entityList = new ArrayList<>(aspectScoresForEntity.keySet());
-        Map<String, Double> entityScores;
-
-        for (String entity : entityList) {
-            Map<String, Double> aspectScores = aspectScoresForEntity.get(entity);
-            List<String> aspectList = new ArrayList<>(aspectScores.keySet());
-            for (String aspect : aspectList) {
-                double aspectScore = aspectScores.get(aspect);
-
-                if (entityScoresForAspect.containsKey(aspect)) {
-                    entityScores = entityScoresForAspect.get(aspect);
-                } else {
-                    entityScores = new HashMap<>();
-                }
-                entityScores.put(entity, aspectScore);
-                entityScoresForAspect.put(aspect, entityScores);
-            }
-        }
-    }
-
-
-    /**
-     * Helper method.
-     * This method takes an entity and the candidate aspects and returns a ranked result of aspects.
-     * @param entity String
-     * @param candidateAspects List
-     * @return Map
-     */
-
-    @NotNull
-    private Map<String, Double> scoreAspects(String entity, String entityId, String idContext, List<Aspect> candidateAspects) {
-
-        Map<String, Double> aspectScores = new HashMap<>();
-        // Create the pseudo-document for the entity
-        // We use a candidate set retrieved using the entity name as the query to create the pseudo-document
-        PseudoDocument pseudoDocument = createPseudoDocument(entity);
-
-        if (pseudoDocument != null) {
-
-            // Get the probability distribution over the co-occurring entities
-            Map<String, Double> distribution = getDistribution(entityId, idContext, pseudoDocument);
-
-            // Now score the candidate aspects
-            aspectScores = scoreAspects(idContext, distribution, candidateAspects);
-
-        }
-        return Utilities.sortByValueDescending(aspectScores);
-    }
-
-    /**
-     * Helper method.
-     * This method takes a distribution of contextual entities and the candidate aspects.
-     * It then scores each aspect using this distribution.
-     * @param distribution Map
-     * @param candidateAspects Map
-     * @return Map
-     */
-
-    @NotNull
-    private Map<String, Double> scoreAspects(String entityId,
-                                             Map<String, Double> distribution,
-                                             @NotNull List<Aspect> candidateAspects) {
-
-        Map<String, Double> aspectScores = new HashMap<>();
-
-
-        // For every candidate aspect
-        for (Aspect aspect : candidateAspects) {
-
-            // Get all the (entity, id) in the aspect (provided with the data + WAT annotations)
-            Map<String, Integer> aspectEntity = aspectEntityMap.get(entityId).get(aspect.getId());
-
-            // Score the aspect
-            double score = scoreAspect(distribution, new ArrayList<>(aspectEntity.keySet()));
-            aspectScores.put(aspect.getId(), score);
-        }
-
-        return aspectScores;
-    }
-
-    /**
-     * Helper method.
-     * This method takes a distribution of contextual entities and a list of entities in a aspect.
-     * It then calculates the score for the aspect.
-     * @param distribution Map
-     * @param aspectEntityList List
-     * @return Double Score of the aspect
-     */
-
-    private double scoreAspect(Map<String, Double> distribution, @NotNull List<String> aspectEntityList) {
-        double score = 0.0d;
-
-        for (String aspectEntity : aspectEntityList) {
-            if (distribution.containsKey(aspectEntity.toLowerCase())) {
-                score += distribution.get(aspectEntity.toLowerCase());
-            }
-        }
-        return score;
-    }
-
-    /**
-     * Helper method.
-     * Returns a distribution of contextual entities.
-     * Uses entity relatedness to calculate the distribution.
-     * @param pseudoDocument PseudoDocument A PseudoDocument for an entity
-     * @return Map A distribution of contextual entities.
-     */
-
     @NotNull
     private Map<String, Double> getDistribution(String entityID, String idContext,
                                                 @NotNull PseudoDocument pseudoDocument) {
@@ -388,16 +174,6 @@ public class Experiment3 {
 
         return relMap;
     }
-
-
-    /**
-     * Helper method.
-     * Returns the relatedness between between two entities.
-     * @param targetEntityId String First Entity.
-     * @param contextEntityId String Second Entity
-     * @return Double Relatedness
-     */
-
     private double getRelatedness(@NotNull String targetEntityId, String targetIdContext, String contextEntityId) {
         Map<String, Integer> targetEntityMap;
 
@@ -540,24 +316,14 @@ public class Experiment3 {
         String s = sb.toString().trim();
         return s.replaceAll(" ", "%20");
     }
-
-    /**
-     * Main method.
-     * @param args Command line arguments.
-     */
-
     public static void main(@NotNull String[] args) {
         String indexDir = args[0];
         String mainDir = args[1];
         String dataDir = args[2];
-        String outputDir = args[3];
-        String jsonFile = args[4];
-        String contextType = args[5];
-        String contextEntityFile = args[6];
-        String aspectEntityFile = args[7];
-        String p = args[8];
-        String a = args[9];
-        String s = args[10];
+        String jsonFile = args[3];
+        String contextEntityFile = args[4];
+        String a = args[5];
+        String s = args[6];
 
         Analyzer analyzer = null;
         Similarity similarity = null;
@@ -591,7 +357,7 @@ public class Experiment3 {
                 System.out.println("Similarity: LMJM");
                 float lambda;
                 try {
-                    lambda = Float.parseFloat(args[11]);
+                    lambda = Float.parseFloat(args[7]);
                     System.out.println("Lambda = " + lambda);
                     similarity = new LMJelinekMercerSimilarity(lambda);
                 } catch (IndexOutOfBoundsException e) {
@@ -611,12 +377,6 @@ public class Experiment3 {
                 System.exit(1);
         }
 
-
-        boolean parallel = false;
-        if (p.equalsIgnoreCase("true")) {
-            parallel = true;
-        }
-
         Scanner sc = new Scanner(System.in);
         System.out.println("Enter the entity relation type to use. Your choices are:");
         System.out.println("mw (Milne-Witten)");
@@ -629,11 +389,8 @@ public class Experiment3 {
         System.out.println("Enter you choice:");
         relType = sc.nextLine();
 
-        String runFile = "3-ecn-" + contextType + "-context-rel-dist-" + relType;
-
-
-        new Experiment3(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
-                runFile,parallel, relType, analyzer, similarity);
+        new RelatednessAnalysis(indexDir, mainDir, dataDir, jsonFile, contextEntityFile,
+                relType, analyzer, similarity);
 
     }
 }

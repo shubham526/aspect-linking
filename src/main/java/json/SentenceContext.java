@@ -14,4 +14,6 @@ public class SentenceContext extends Context {
     public SentenceContext(@NotNull JSONObject o) {
         super((JSONObject) o.get("sent_context"));
     }
+
+
 }

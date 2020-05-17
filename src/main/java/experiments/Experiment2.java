@@ -1,12 +1,13 @@
 package experiments;
 
+import api.WATApi;
 import help.PseudoDocument;
 import help.Utilities;
-import api.WATApi;
 import json.Aspect;
 import json.JsonObject;
 import json.ReadJsonlFile;
 import lucene.Index;
+import me.tongfei.progressbar.ProgressBar;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
@@ -25,6 +26,7 @@ import org.json.simple.JSONObject;
 import java.io.IOException;
 import java.io.StringReader;
 import java.util.*;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * =====================================================Experiment-2=======================================
@@ -49,6 +51,7 @@ public class Experiment2 {
     private Map<String, HashMap<String, Integer>> contextEntityMap = new HashMap<>();
     private Map<String, HashMap<String, HashMap<String, Integer>>> aspectEntityMap = new HashMap<>();
     private String relType = "";
+    private final boolean parallel;
 
 
     /**
@@ -74,6 +77,7 @@ public class Experiment2 {
                        String aspectEntityFile,
                        String runFile,
                        boolean useRelatedness,
+                       boolean parallel,
                        @NotNull String relType,
                        Analyzer analyzer,
                        Similarity similarity) {
@@ -81,6 +85,8 @@ public class Experiment2 {
         String jsonFilePath = mainDir + "/" + dataDir + "/"  + jsonFile;
         String contextEntityFilePath = mainDir + "/" + dataDir + "/" + contextEntityFile;
         String aspectEntityFilePath = mainDir + "/" + dataDir + "/" + aspectEntityFile;
+        String runFilePath = mainDir + "/" + outputDir + "/" + runFile;
+        this.parallel = parallel;
 
         if (relType.equalsIgnoreCase("mw")) {
             System.out.println("Entity Similarity Measure: Milne-Witten");
@@ -104,8 +110,6 @@ public class Experiment2 {
             System.out.println("Entity Similarity Measure: Pointwise Mutual Information");
             this.relType = "pmi";
         }
-        runFile = runFile.substring(0,runFile.indexOf("."));
-        String runFilePath = mainDir + "/" + outputDir + "/" + runFile + "-" + relType + ".run";
 
         System.out.print("Setting up index for use...");
         searcher = new Index.Setup(indexDir, "text", analyzer, similarity).getSearcher();
@@ -149,15 +153,36 @@ public class Experiment2 {
                        boolean useRelatedness) {
 
 
-        // Do in parallel
-        jsonObjectList.parallelStream().forEach(jsonObject -> doTask(jsonObject, useRelatedness));
+        if (parallel) {
+            System.out.println("Using Parallel Streams.");
+            int parallelism = ForkJoinPool.commonPool().getParallelism();
+            int numOfCores = Runtime.getRuntime().availableProcessors();
+            System.out.println("Number of available processors = " + numOfCores);
+            System.out.println("Number of threads generated = " + parallelism);
 
-        // Do in serial
-        //jsonObjectList.forEach(jsonObject -> doTask(jsonObject, useRelatedness));
+            if (parallelism == numOfCores - 1) {
+                System.err.println("WARNING: USING ALL AVAILABLE PROCESSORS");
+                System.err.println("USE: \"-Djava.util.concurrent.ForkJoinPool.common.parallelism=N\" " +
+                        "to set the number of threads used");
+            }
+            // Do in parallel
+            jsonObjectList.parallelStream().forEach(jsonObject -> doTask(jsonObject, useRelatedness));
+        } else {
+            System.out.println("Using Sequential Streams.");
+
+            // Do in serial
+            ProgressBar pb = new ProgressBar("Progress", jsonObjectList.size());
+            for (JSONObject jsonObject : jsonObjectList) {
+                doTask(jsonObject, useRelatedness);
+                pb.step();
+            }
+            pb.close();
+        }
 
         System.out.print("Writing to run file...");
         Utilities.writeFile(runFileStrings, runFilePath);
         System.out.println("[Done].");
+        System.out.println("Run file written at: " + runFilePath);
 
     }
 
@@ -169,10 +194,11 @@ public class Experiment2 {
 
         String mention = JsonObject.getMention(jsonObject);
         String entityName = JsonObject.getEntityName(jsonObject);
-        String entityId = JsonObject.getEntityId(jsonObject);
+        String IdContext = JsonObject.getIdContext(jsonObject); // id_context is unique
+        String entityID = JsonObject.getEntityId(jsonObject);
 
         // Get the Map of (entity, id) in the context
-        Map<String, Integer> entityMap = contextEntityMap.get(entityId);
+        Map<String, Integer> entityMap = contextEntityMap.get(entityID);
 
         // Get the candidate aspects
         List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
@@ -183,14 +209,14 @@ public class Experiment2 {
             // If the entity is not already present in the score map
             if (!aspectScoresForEntity.containsKey(entity)) {
                 // Score the candidate aspects for the entity
-                Map<String, Double> aspectScores = scoreAspects(entity, entityId, candidateAspects);
+                Map<String, Double> aspectScores = scoreAspects(entity, IdContext, candidateAspects);
 
                 // Store the aspect scores for the entity
                 aspectScoresForEntity.put(entity,aspectScores);
             }
         }
         getEntityScoresForAspect(aspectScoresForEntity, entityScoresForAspect);
-        finalScores = getFinalScoresOfAspect(entityName, entityId, entityScoresForAspect, useRelatedness);
+        finalScores = getFinalScoresOfAspect(entityName, IdContext, entityScoresForAspect, useRelatedness);
         makeRunFileStrings(jsonObject, finalScores, useRelatedness);
         System.out.println("Done: " + mention);
 
@@ -272,6 +298,9 @@ public class Experiment2 {
             // If using relatedness measure
             for (String entity : entityScores.keySet()) {
                 double entityScore = entityScores.get(entity);
+                if (entityScore == 0.0) {
+                    continue;
+                }
                 int id = WATApi.TitleResolver.getId(eName);
                 int entityId = contextEntityMap.get(eID).get(entity);
                 double relatedness;
@@ -550,17 +579,18 @@ public class Experiment2 {
         String dataDir = args[2];
         String outputDir = args[3];
         String jsonFile = args[4];
-        String contextEntityFile = args[5];
-        String aspectEntityFile = args[6];
-        String runFile = args[7];
+        String contextType = args[5];
+        String contextEntityFile = args[6];
+        String aspectEntityFile = args[7];
         String rel = args[8];
-        String a = args[9];
-        String s = args[10];
+        String p = args[9];
+        String a = args[10];
+        String s = args[11];
 
         Analyzer analyzer = null;
         Similarity similarity = null;
         boolean useRelatedness = false;
-        String relType = "";
+        String relType = "", runFile = "";
 
         switch (a) {
             case "std" :
@@ -590,7 +620,7 @@ public class Experiment2 {
                 System.out.println("Similarity: LMJM");
                 float lambda;
                 try {
-                    lambda = Float.parseFloat(args[11]);
+                    lambda = Float.parseFloat(args[12]);
                     System.out.println("Lambda = " + lambda);
                     similarity = new LMJelinekMercerSimilarity(lambda);
                 } catch (IndexOutOfBoundsException e) {
@@ -624,8 +654,17 @@ public class Experiment2 {
             relType = sc.nextLine();
             useRelatedness = true;
         }
+        if (useRelatedness) {
+            runFile = "2a-ecn-" + contextType + "-context-using-relatedness-" + relType + ".run";
+        } else {
+            runFile = "2b-ecn-" + contextType + "-context-not-using-relatedness.run";
+        }
+        boolean parallel = false;
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
         new Experiment2(indexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
-                runFile, useRelatedness, relType, analyzer, similarity);
+                runFile, useRelatedness, parallel, relType, analyzer, similarity);
 
 
     }

@@ -1,11 +1,12 @@
 package experiments;
 
-import help.Utilities;
 import api.WATApi;
+import help.Utilities;
 import json.Aspect;
 import json.JsonObject;
 import json.ReadJsonlFile;
 import lucene.Index;
+import me.tongfei.progressbar.ProgressBar;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.en.EnglishAnalyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
@@ -22,6 +23,7 @@ import org.json.simple.JSONObject;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * =======================================Experiment-5========================================
@@ -39,26 +41,31 @@ public class Experiment5 {
     private final IndexSearcher pageIndexSearcher;
     // ArrayList of run strings
     private final ArrayList<String> runFileStrings = new ArrayList<>();
-    private Map<String, Integer> entityIDMap = new ConcurrentHashMap<>();
+    private Map<String, HashMap<String, Integer>> contextEntityMap = new ConcurrentHashMap<>();
     private Map<String, HashMap<String, HashMap<String, Integer>>> aspectEntityMap = new HashMap<>();
     private String relType;
+    boolean parallel;
 
     public Experiment5(String pageIndexDir,
                        String mainDir,
                        String dataDir,
                        String outputDir,
-                       String idFile,
                        String jsonFile,
+                       String contextEntityFile,
                        String aspectEntityFile,
                        String outFile,
+                       boolean useRelatedness,
+                       boolean parallel,
                        @NotNull String relType,
                        Analyzer analyzer,
                        Similarity similarity) {
 
 
-        String idFilePath = mainDir + "/" + dataDir + "/" + idFile;
         String jsonFilePath = mainDir + "/" + dataDir + "/"  + jsonFile;
+        String contextEntityFilePath = mainDir + "/" + dataDir + "/" + contextEntityFile;
         String aspectEntityFilePath = mainDir + "/" + dataDir + "/" + aspectEntityFile;
+        String outputFilePath = mainDir + "/" + outputDir + "/" + outFile;
+        this.parallel = parallel;
 
         if (relType.equalsIgnoreCase("mw")) {
             System.out.println("Entity Similarity Measure: Milne-Witten");
@@ -82,13 +89,10 @@ public class Experiment5 {
             System.out.println("Entity Similarity Measure: Pointwise Mutual Information");
             this.relType = "pmi";
         }
-        outFile = outFile.substring(0,outFile.indexOf("."));
-        String outputFilePath = mainDir + "/" + outputDir + "/" + outFile + "-" + relType + ".run";
 
-
-        System.out.print("Reading id file...");
+        System.out.print("Reading context entity file...");
         try {
-            entityIDMap = Utilities.readMap(idFilePath);
+            contextEntityMap = Utilities.readMap(contextEntityFilePath);
         } catch (IOException | ClassNotFoundException e) {
             e.printStackTrace();
         }
@@ -111,17 +115,37 @@ public class Experiment5 {
         pageIndexSearcher = new Index.Setup(pageIndexDir, "OutlinkIds", analyzer, similarity).getSearcher();
         System.out.println("[Done].");
 
-        score(outputFilePath, jsonObjectList);
+        score(outputFilePath, jsonObjectList, useRelatedness);
 
     }
 
-    private void score(String runFilePath, @NotNull List<JSONObject> jsonObjectList) {
+    private void score(String runFilePath, @NotNull List<JSONObject> jsonObjectList, boolean useRelatedness) {
 
-        // Do in parallel
-        jsonObjectList.parallelStream().forEach(this::doTask);
+        if (parallel) {
+            System.out.println("Using Parallel Streams.");
+            int parallelism = ForkJoinPool.commonPool().getParallelism();
+            int numOfCores = Runtime.getRuntime().availableProcessors();
+            System.out.println("Number of available processors = " + numOfCores);
+            System.out.println("Number of threads generated = " + parallelism);
 
-        // Do in serial
-        //jsonObjectList.forEach(this::doTask);
+            if (parallelism == numOfCores - 1) {
+                System.err.println("WARNING: USING ALL AVAILABLE PROCESSORS");
+                System.err.println("USE: \"-Djava.util.concurrent.ForkJoinPool.common.parallelism=N\" " +
+                        "to set the number of threads used");
+            }
+            // Do in parallel
+            jsonObjectList.parallelStream().forEach(jsonObject -> doTask(jsonObject, useRelatedness));
+        } else {
+            System.out.println("Using Sequential Streams.");
+
+            // Do in serial
+            ProgressBar pb = new ProgressBar("Progress", jsonObjectList.size());
+            for (JSONObject jsonObject : jsonObjectList) {
+                doTask(jsonObject, useRelatedness);
+                pb.step();
+            }
+            pb.close();
+        }
 
         System.out.print("Writing to run file...");
         Utilities.writeFile(runFileStrings, runFilePath);
@@ -129,19 +153,20 @@ public class Experiment5 {
 
     }
 
-    private void doTask(JSONObject jsonObject) {
+    private void doTask(JSONObject jsonObject, boolean useRelatedness) {
         String entityID = JsonObject.getEntityId(jsonObject);
         String entityMention = JsonObject.getMention(jsonObject);
+        String idContext = JsonObject.getIdContext(jsonObject);
         List<Aspect> candidateAspects = JsonObject.getAspectCandidates(jsonObject);
 
         Map<String, Double> aspectScores;
         Map<String, Double> pageEntityDistribution;
 
         // Get the list of all entities on the Wikipedia page of this entity.
-        pageEntityDistribution = getPageEntityDistribution(entityID);
+        pageEntityDistribution = getPageEntityDistribution(entityID, idContext, useRelatedness);
 
         // Score the aspects
-        aspectScores = scoreAspects(entityID, pageEntityDistribution, candidateAspects);
+        aspectScores = scoreAspects(idContext, pageEntityDistribution, candidateAspects);
 
         makeRunFileStrings(jsonObject, aspectScores);
         System.out.println("Done: " + entityMention);
@@ -205,7 +230,7 @@ public class Experiment5 {
      */
 
     @NotNull
-    private Map<String, Double> getPageEntityDistribution(String entityID) {
+    private Map<String, Double> getPageEntityDistribution(String entityID, String idContext, boolean useRelatedness) {
         Map<String, Double> pageEntityDistribution = new HashMap<>();
         String wikiEntityID = "enwiki:" + entityID;
 
@@ -218,10 +243,10 @@ public class Experiment5 {
 
             // Make a list from this string
             String[] entityArray = entityString.split("\n");
-            for (String eid : entityArray) {
-                double rel = getRelatedness(wikiEntityID, eid);
-                pageEntityDistribution.put(Utilities.process(eid), rel);
+            if (useRelatedness) {
+                getRelatednessDistribution(wikiEntityID, idContext, entityArray, pageEntityDistribution);
             }
+
 
         } catch (IOException | ParseException e) {
             e.printStackTrace();
@@ -229,31 +254,50 @@ public class Experiment5 {
         return Utilities.sortByValueDescending(pageEntityDistribution);
     }
 
+    private void getRelatednessDistribution(String wikiEntityID, String idContext,
+                                            @NotNull String[] entityArray, Map<String, Double> pageEntityDistribution) {
+
+        for (String eid : entityArray) {
+            double rel = getRelatedness(wikiEntityID, idContext, eid);
+            pageEntityDistribution.put(Utilities.process(eid), rel);
+        }
+    }
+
     /**
      * Helper method.
      * Returns the relatedness between between two entities.
-     * @param e1 String First Entity.
-     * @param e2 String Second Entity
+
      * @return Double Relatedness
      */
 
-    private double getRelatedness(@NotNull String e1, @NotNull String e2) {
+    private double getRelatedness(@NotNull String targetEntityId, String targetIdContext, String contextEntityId) {
+        HashMap<String, Integer> targetEntityMap;
+
+        if (contextEntityMap.containsKey(targetIdContext)) {
+            targetEntityMap = contextEntityMap.get(targetIdContext);
+        } else {
+            targetEntityMap = new HashMap<>();
+        }
 
         int id1, id2;
+        String s1 = targetEntityId.substring(targetEntityId.indexOf(":") + 1).replaceAll("%20", "_");
+        String s2 = contextEntityId.substring(contextEntityId.indexOf(":") + 1).replaceAll("%20", "_");
 
-        if (e1.equalsIgnoreCase(e2.substring(e2.indexOf(":") + 1))) {
+        if (targetEntityId.equalsIgnoreCase(contextEntityId)) {
             return 1.0d;
         }
 
+        if (targetEntityMap.containsKey(s1)) {
+            id1 = targetEntityMap.get(s1);
+        } else {
+            id1 = WATApi.TitleResolver.getId(s1);
+        }
 
-        id1 = entityIDMap.containsKey(e1)
-                ? entityIDMap.get(e1)
-                : WATApi.TitleResolver.getId(e1.substring(e1.indexOf(":") + 1).replaceAll("%20", "_"));
-
-        id2 = entityIDMap.containsKey(e2)
-                ? entityIDMap.get(e2)
-                : WATApi.TitleResolver.getId(e2.substring(e2.indexOf(":") + 1).replaceAll("%20", "_"));
-
+        if (targetEntityMap.containsKey(s2)) {
+            id2 = targetEntityMap.get(s2);
+        } else {
+            id2 = WATApi.TitleResolver.getId(s2);
+        }
 
         if (id1 < 0 || id2 < 0) {
             return 0.0d;
@@ -290,12 +334,16 @@ public class Experiment5 {
         String mainDir = args[1];
         String dataDir = args[2];
         String outputDir = args[3];
-        String idFile = args[4];
-        String jsonFile = args[5];
+        String jsonFile = args[4];
+        String contextEntityFile = args[5];
         String aspectEntityFile = args[6];
-        String outFile = args[7];
-        String a = args[8];
-        String sim = args[9];
+        String rel = args[7];
+        String p = args[8];
+        String a = args[9];
+        String sim = args[10];
+
+        String relType = "", runFile = "", s1 = "", s2 = "freq";
+        boolean parallel = false, useRel = false;
 
 
         switch (a) {
@@ -317,15 +365,17 @@ public class Experiment5 {
             case "bm25":
                 similarity = new BM25Similarity();
                 System.out.println("Similarity: BM25");
+                s1 = "bm25";
                 break;
             case "LMJM":
             case "lmjm":
                 System.out.println("Similarity: LMJM");
                 float lambda;
                 try {
-                    lambda = Float.parseFloat(args[10]);
+                    lambda = Float.parseFloat(args[11]);
                     System.out.println("Lambda = " + lambda);
                     similarity = new LMJelinekMercerSimilarity(lambda);
+                    s1 = "lmjm";
                 } catch (IndexOutOfBoundsException e) {
                     System.out.println("Missing lambda value for similarity LM-JM");
                     System.exit(1);
@@ -335,27 +385,37 @@ public class Experiment5 {
             case "lmds":
                 System.out.println("Similarity: LMDS");
                 similarity = new LMDirichletSimilarity();
+                s1 = "lmds";
                 break;
 
             default:
                 System.out.println("Wrong choice of similarity! Exiting.");
                 System.exit(1);
         }
+        if (rel.equalsIgnoreCase("true")) {
+            Scanner sc = new Scanner(System.in);
+            System.out.println("Enter the entity relation type to use. Your choices are:");
+            System.out.println("mw (Milne-Witten)");
+            System.out.println("jaccard (Jaccard measure of pages outlinks)");
+            System.out.println("lm (language model)");
+            System.out.println("w2v (Word2Vect)");
+            System.out.println("cp (Conditional Probability)");
+            System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
+            System.out.println("pmi (Pointwise Mutual Information)");
+            System.out.println("Enter you choice:");
+            relType = sc.nextLine();
+            s2 = "rel";
+            useRel = true;
+        }
 
-        Scanner sc = new Scanner(System.in);
-        System.out.println("Enter the entity relation type to use. Your choices are:");
-        System.out.println("mw (Milne-Witten)");
-        System.out.println("jaccard (Jaccard measure of pages outlinks)");
-        System.out.println("lm (language model)");
-        System.out.println("w2v (Word2Vect)");
-        System.out.println("cp (Conditional Probability)");
-        System.out.println("ba (Barabasi-Albert on the Wikipedia Graph)");
-        System.out.println("pmi (Pointwise Mutual Information)");
-        System.out.println("Enter you choice:");
-        String relType = sc.nextLine();
+        if (p.equalsIgnoreCase("true")) {
+            parallel = true;
+        }
 
-        new Experiment5(pageIndexDir, mainDir, dataDir, outputDir, idFile, jsonFile, aspectEntityFile,
-                outFile, relType, analyzer, similarity);
+        runFile = "5-" + s2 + "-dist-wiki-page-" + s1 + ".run";
+
+        new Experiment5(pageIndexDir, mainDir, dataDir, outputDir, jsonFile, contextEntityFile, aspectEntityFile,
+                runFile, useRel,parallel, relType, analyzer, similarity);
 
     }
 }

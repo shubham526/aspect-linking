@@ -11,10 +11,7 @@ import org.jetbrains.annotations.NotNull;
 import org.json.simple.JSONObject;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -41,7 +38,7 @@ public class Experiment1 {
     private final AtomicInteger counter = new AtomicInteger();
     private final ArrayList<String> runFileStrings = new ArrayList<>();
     private final String mode, contextType;
-    private final boolean parallel;
+    private final boolean parallel, useSalient;
 
     public Experiment1(String mainDir,
                        String dataDir,
@@ -51,6 +48,7 @@ public class Experiment1 {
                        String runFile,
                        String contextType,
                        @NotNull String mode,
+                       boolean useSalient,
                        boolean parallel) {
 
         String jsonFilePath = mainDir + "/" + dataDir + "/" + jsonFile;
@@ -59,11 +57,18 @@ public class Experiment1 {
         this.mode = mode;
         this.parallel = parallel;
         this.contextType = contextType;
+        this.useSalient = useSalient;
 
         if (mode.equalsIgnoreCase("all")) {
             System.out.println("Using all entities.");
         } else {
             System.out.println("Using salient entities.");
+        }
+
+        if (useSalient) {
+            System.out.println("Aspect scoring using: SWAT Entities");
+        } else {
+            System.out.println("Aspect scoring using: WAT Entities");
         }
 
         if (contextType.equalsIgnoreCase("sent")) {
@@ -141,7 +146,7 @@ public class Experiment1 {
         Map<String, Map<String, Double>> rankings = new HashMap<>(); // Map to store the rankings
         Map<String, Double> paraScoreMap; // Inner map
 
-        String entityID = JsonObject.getEntityId(jsonObject);
+        String idContext = JsonObject.getIdContext(jsonObject);
         String mention = JsonObject.getMention(jsonObject);
         Context context;
 
@@ -159,13 +164,13 @@ public class Experiment1 {
 
         // Score the candidate aspects for the mention using the context.
         // Delegates the task to a helper method.
-        paraScoreMap = score(entityID, context, candidateAspects);
+        paraScoreMap = score(idContext, context, candidateAspects);
 
 
         // If the helper method returned a non-empty result
         if (! paraScoreMap.isEmpty()) {
             // Make a map entry where Key = id_context and Value = Map of (id_context, score)
-            rankings.put(JsonObject.getIdContext(jsonObject), paraScoreMap);
+            rankings.put(idContext, paraScoreMap);
         } else {
             // If you are here then it means that no salient entities were found for the context
             // Count this. Useful statistic (maybe!)
@@ -176,7 +181,7 @@ public class Experiment1 {
             for (Aspect aspect : candidateAspects) {
                 paraScoreMap.put(aspect.getId(), 0.0d);
             }
-            rankings.put(JsonObject.getIdContext(jsonObject), paraScoreMap);
+            rankings.put(idContext, paraScoreMap);
         }
         makeRunFileStrings(rankings);
         System.out.println("Done: " + mention);
@@ -232,20 +237,25 @@ public class Experiment1 {
         if (! swatAnnotations.isEmpty()) {
 
             // Get the list of salient entities. But first lowercase them all.
-            List<String> swatEntityList = new ArrayList<>(swatAnnotations.keySet());
+            Set<String> swatEntitySet = swatAnnotations.keySet();
 
             // For every candidate aspect
             for (Aspect aspect : candidateAspects) {
-
-                // Get the aspect id
+                Set<String> aspectEntitySet;
+                String aspectContent = aspect.getContent();
                 String aspectId = aspect.getId();
 
                 // Get the list of entities in the aspect
-                List<String> aspectEntityList = getAspectEntityList(entityID, aspect);
+                if (useSalient) {
+                    aspectEntitySet = SWATApi.getEntities(aspectContent, mode).keySet();
+                } else {
+                    aspectEntitySet = new HashSet<>(getAspectEntityList(entityID, aspect));
+                }
 
                 // Find any common entities between the list of salient entities for the context and the aspect.
                 // Basically, we are finding how many aspect entities are salient in the context.
-                List<String> common = Utilities.intersection(swatEntityList, aspectEntityList);
+                aspectEntitySet.retainAll(swatEntitySet);
+                List<String> common = new ArrayList<>(aspectEntitySet);
 
                 // Is there anything common between the two?
                 // If yes, then calculate the score of the candidate aspect.
@@ -320,16 +330,28 @@ public class Experiment1 {
         String aspectEntityFile = args[4];
         String contextType = args[5];
         String mode = args[6];
-        String p = args[7];
+        String s = args[7];
+        String p = args[8];
 
         boolean parallel = false;
         if (p.equalsIgnoreCase("true")) {
             parallel = true;
         }
+        boolean useSalientEntities = false;
+        if (s.equalsIgnoreCase("true")) {
+            useSalientEntities = true;
+        }
+        String runFile = "";
 
-        String runFile = "salience-" +  contextType + "-context-" + mode + "-entities.run";
+        if (useSalientEntities) {
+            runFile = "salience-" +  contextType + "-context-" + mode + "-entities-" + "aspect-swat-entities.run";
+        } else {
+            runFile = "salience-" +  contextType + "-context-" + mode + "-entities-" + "aspect-wat-entities.run";
+        }
 
-        new Experiment1(mainDir, dataDir, outputDir, jsonFile, aspectEntityFile, runFile, contextType, mode, parallel);
+
+        new Experiment1(mainDir, dataDir, outputDir, jsonFile, aspectEntityFile, runFile, contextType, mode,
+                useSalientEntities, parallel);
     }
 
 }
